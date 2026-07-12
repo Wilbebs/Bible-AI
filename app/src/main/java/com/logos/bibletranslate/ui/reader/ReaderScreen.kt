@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
@@ -34,6 +35,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -68,6 +71,7 @@ import com.logos.bibletranslate.data.VerseChatCache
 import com.logos.bibletranslate.data.VerseChatClient
 import com.logos.bibletranslate.data.VerseData
 import com.logos.bibletranslate.data.VerseTokenizer
+import com.logos.bibletranslate.R
 import com.logos.bibletranslate.data.WordTranslationRepository
 import com.logos.bibletranslate.ui.theme.Sparkle
 import kotlinx.coroutines.delay
@@ -126,8 +130,14 @@ fun ReaderScreen(
                                 style = MaterialTheme.typography.titleMedium,
                             )
                         }
-                        // Reserved center slot for a future app logo/mark.
-                        Spacer(Modifier.weight(1f))
+                        // Center logo — kept small so the bar stays compact.
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                            Image(
+                                painter = painterResource(R.drawable.logo_jesus_group),
+                                contentDescription = null,
+                                modifier = Modifier.height(30.dp),
+                            )
+                        }
                         VerseSearchBar(
                             books = uiState.books,
                             onSubmit = viewModel::onVerseSearchSubmitted,
