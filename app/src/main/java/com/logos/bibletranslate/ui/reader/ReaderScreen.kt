@@ -8,6 +8,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -37,11 +39,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.Image
 import androidx.compose.ui.res.painterResource
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -57,6 +62,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -73,6 +80,7 @@ import com.logos.bibletranslate.data.VerseData
 import com.logos.bibletranslate.data.VerseTokenizer
 import com.logos.bibletranslate.R
 import com.logos.bibletranslate.data.WordTranslationRepository
+import com.logos.bibletranslate.ui.theme.Glass
 import com.logos.bibletranslate.ui.theme.Sparkle
 import kotlinx.coroutines.delay
 
@@ -115,6 +123,10 @@ fun ReaderScreen(
             // it was eating a large chunk of the screen before any verse text appeared.
             Surface(tonalElevation = 2.dp) {
                 Column {
+                    // Search-bar/nav-pill row height, standardized so the logo can be sized
+                    // exactly 1.6x it and the two flanking controls read as vertically balanced
+                    // against it.
+                    val navRowHeight = 32.dp
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -123,25 +135,38 @@ fun ReaderScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // Single fluid book→chapter entry point (replaces the separate "Ch."
-                        // button — chapter navigation now lives inside the same picker).
-                        TextButton(onClick = { showBookChapterPicker = true }) {
+                        // button — chapter navigation now lives inside the same picker), balanced
+                        // against the search bar on the other side of the centered logo.
+                        TextButton(
+                            onClick = { showBookChapterPicker = true },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(navRowHeight)
+                                .clip(RoundedCornerShape(50))
+                                .border(BorderStroke(1.dp, Glass.buttonBrush()), RoundedCornerShape(50)),
+                        ) {
                             Text(
                                 "${uiState.selectedBookName} ${uiState.selectedChapter} ▾",
                                 style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
                             )
                         }
-                        // Center logo — kept small so the bar stays compact.
-                        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                            Image(
-                                painter = painterResource(R.drawable.logo_jesus_group),
-                                contentDescription = null,
-                                modifier = Modifier.height(30.dp),
-                            )
-                        }
-                        VerseSearchBar(
-                            books = uiState.books,
-                            onSubmit = viewModel::onVerseSearchSubmitted,
+                        // Center logo — sized relative to the flanking controls (~1.6x their
+                        // height) so it reads as the visual anchor between them.
+                        Image(
+                            painter = painterResource(R.drawable.logo_jesus_group),
+                            contentDescription = null,
+                            modifier = Modifier
+                                .height(navRowHeight * 1.6f)
+                                .padding(horizontal = 6.dp),
                         )
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                            VerseSearchBar(
+                                books = uiState.books,
+                                onSubmit = viewModel::onVerseSearchSubmitted,
+                                modifier = Modifier.height(navRowHeight),
+                            )
+                        }
                     }
                     LanguagePairSelector(
                         readingLanguage = uiState.language,
@@ -159,6 +184,23 @@ fun ReaderScreen(
         val isBubbleOpen = uiState.chatBubble != null
 
         Box(Modifier.fillMaxSize()) {
+            // Outside-tap-to-minimize catcher: placed *behind* the verse list (lowest z) so any
+            // tap that actually lands on verse text is handled there first — the scripture stays
+            // fully interactable (scrollable, tappable, selectable) while the bubble is open. This
+            // only fires for taps that land somewhere neither the verse list nor the panel itself
+            // handles (e.g. blank space below the last verse).
+            if (isBubbleOpen) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = viewModel::onBubbleOutsideTap,
+                        ),
+                )
+            }
+
             if (uiState.isLoading) {
                 Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
@@ -191,45 +233,24 @@ fun ReaderScreen(
                 val bubble = lastBubble
                 if (bubble != null) {
                     val verse = uiState.verses.firstOrNull { it.verse == bubble.verseNumber }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            // No scrim/darkening here — the scripture behind the panel must stay
-                            // exactly as readable (and scrollable) as when the bubble is closed.
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                // Tapping outside the panel collapses it to just the translation
-                                // (conversation history kept) — only the explicit "✕" fully closes
-                                // it, and the trash icon is what clears the conversation.
-                                onClick = viewModel::onBubbleOutsideTap,
-                            ),
-                    ) {
-                        ChatBubble(
-                            verseLabel = verse?.let { "${it.bookName} ${it.chapter}:${it.verse}" } ?: "",
-                            sourceLanguage = uiState.language,
-                            bubble = bubble,
-                            onClose = viewModel::onCloseBubble,
-                            onStartOver = viewModel::onStartOver,
-                            onExpand = viewModel::onExpandBubble,
-                            onLanguageChanged = viewModel::onBubbleLanguageChanged,
-                            onInputChanged = viewModel::onFollowUpInputChanged,
-                            onSend = viewModel::onSendFollowUp,
-                            onChipTapped = viewModel::onChipTapped,
-                            onResponseWordTapped = viewModel::onResponseWordTapped,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null,
-                                    // While expanded, taps inside the panel are just consumed here
-                                    // so they don't fall through to the outside-tap handler above.
-                                    // While minimized, tapping anywhere on the collapsed panel
-                                    // (not just its Surface) expands it back.
-                                    onClick = { if (bubble.isMinimized) viewModel.onExpandBubble() },
-                                ),
-                        )
-                    }
+                    // No scrim/darkening, and no full-screen click surface here — this box is
+                    // sized to the panel's own footprint (bottom-aligned, wrap content) via
+                    // ChatBubble's internal BoxWithConstraints, so it never blocks scripture taps
+                    // outside its own visible bounds (§5).
+                    ChatBubble(
+                        verseLabel = verse?.let { "${it.bookName} ${it.chapter}:${it.verse}" } ?: "",
+                        sourceLanguage = uiState.language,
+                        bubble = bubble,
+                        onClose = viewModel::onCloseBubble,
+                        onStartOver = viewModel::onStartOver,
+                        onExpand = viewModel::onExpandBubble,
+                        onLanguageChanged = viewModel::onBubbleLanguageChanged,
+                        onInputChanged = viewModel::onFollowUpInputChanged,
+                        onSend = viewModel::onSendFollowUp,
+                        onChipTapped = viewModel::onChipTapped,
+                        onResponseWordTapped = viewModel::onResponseWordTapped,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
             }
         }
@@ -393,7 +414,12 @@ private fun VerseSearchBar(
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("🔎", style = MaterialTheme.typography.labelSmall)
+                Icon(
+                    imageVector = Icons.Filled.Search,
+                    contentDescription = null,
+                    tint = Color.Black,
+                    modifier = Modifier.size(14.dp),
+                )
                 Spacer(Modifier.width(4.dp))
                 Box(Modifier.width(84.dp)) {
                     if (query.isEmpty()) {

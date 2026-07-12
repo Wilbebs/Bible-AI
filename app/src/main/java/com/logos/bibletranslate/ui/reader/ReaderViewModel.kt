@@ -77,6 +77,8 @@ data class ChatBubbleState(
      * expands it back.
      */
     val isMinimized: Boolean = false,
+    /** Increments every time a *new* bubble opens — drives which follow-up suggestion shows (once, not on a timer). */
+    val openSequence: Int = 0,
 )
 
 data class VerseTranslationEntry(val language: BibleLanguage, val text: String?)
@@ -125,6 +127,9 @@ class ReaderViewModel(
 
     /** Separate counter for the word-info lookup, since it runs independently of translation/chat calls. */
     private var wordInfoRequestId = 0
+
+    /** Increments once per bubble opened, so the follow-up placeholder shows a different suggestion each open (not a timer). */
+    private var bubbleOpenSequenceCounter = 0
 
     init {
         viewModelScope.launch {
@@ -614,6 +619,7 @@ class ReaderViewModel(
         val hasData = parts.all { it != null }
 
         val myRequestId = ++liveCallRequestId
+        val openSeq = ++bubbleOpenSequenceCounter
 
         // A lone word gets a pronunciation + definition card, regardless of which translation
         // path handles the rest (tap-word-autofill clarification: single-word focus). The
@@ -628,7 +634,7 @@ class ReaderViewModel(
         if (hasData) {
             val text = parts.filterNotNull().distinctFromNeighbors().joinToString(" ")
             _uiState.value = state.copy(
-                chatBubble = ChatBubbleState(verseNumber, clamped, state.targetLanguage, text, initialHasData = true, wordInfo = initialWordInfo),
+                chatBubble = ChatBubbleState(verseNumber, clamped, state.targetLanguage, text, initialHasData = true, wordInfo = initialWordInfo, openSequence = openSeq),
             )
             singleWord?.let { fetchWordInfoAsync(verse, it, state.language) }
             return
@@ -640,7 +646,7 @@ class ReaderViewModel(
                 _uiState.value = state.copy(
                     chatBubble = ChatBubbleState(
                         verseNumber, clamped, state.targetLanguage,
-                        "No Gemini API key configured for this build.", initialHasData = false, wordInfo = initialWordInfo,
+                        "No Gemini API key configured for this build.", initialHasData = false, wordInfo = initialWordInfo, openSequence = openSeq,
                     ),
                 )
                 singleWord?.let { fetchWordInfoAsync(verse, it, state.language) }
@@ -649,7 +655,7 @@ class ReaderViewModel(
             val selectedText = clamped.joinToString(" ") { tokens[it] }
             _uiState.value = state.copy(
                 chatBubble = ChatBubbleState(
-                    verseNumber, clamped, state.targetLanguage, "Translating…", initialHasData = false, initialIsLoading = true, wordInfo = initialWordInfo,
+                    verseNumber, clamped, state.targetLanguage, "Translating…", initialHasData = false, initialIsLoading = true, wordInfo = initialWordInfo, openSequence = openSeq,
                 ),
             )
             singleWord?.let { fetchWordInfoAsync(verse, it, state.language) }
@@ -670,7 +676,7 @@ class ReaderViewModel(
                 _uiState.value = state.copy(
                     chatBubble = ChatBubbleState(
                         verseNumber, clamped, state.targetLanguage,
-                        "No Translation API key configured for this build.", initialHasData = false, wordInfo = initialWordInfo,
+                        "No Translation API key configured for this build.", initialHasData = false, wordInfo = initialWordInfo, openSequence = openSeq,
                     ),
                 )
                 singleWord?.let { fetchWordInfoAsync(verse, it, state.language) }
@@ -679,7 +685,7 @@ class ReaderViewModel(
             val selectedWords = clamped.map { tokens[it] }
             _uiState.value = state.copy(
                 chatBubble = ChatBubbleState(
-                    verseNumber, clamped, state.targetLanguage, "Translating…", initialHasData = false, initialIsLoading = true, wordInfo = initialWordInfo,
+                    verseNumber, clamped, state.targetLanguage, "Translating…", initialHasData = false, initialIsLoading = true, wordInfo = initialWordInfo, openSequence = openSeq,
                 ),
             )
             singleWord?.let { fetchWordInfoAsync(verse, it, state.language) }
@@ -695,7 +701,7 @@ class ReaderViewModel(
         }
 
         _uiState.value = state.copy(
-            chatBubble = ChatBubbleState(verseNumber, clamped, state.targetLanguage, "No word-level translation yet", initialHasData = false, wordInfo = initialWordInfo),
+            chatBubble = ChatBubbleState(verseNumber, clamped, state.targetLanguage, "No word-level translation yet", initialHasData = false, wordInfo = initialWordInfo, openSequence = openSeq),
         )
         singleWord?.let { fetchWordInfoAsync(verse, it, state.language) }
     }

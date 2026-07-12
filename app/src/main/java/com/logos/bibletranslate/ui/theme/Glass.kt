@@ -24,12 +24,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
-import kotlin.math.cos
-import kotlin.math.sin
 
 /**
  * iOS-26-style "liquid glass" design tokens. Kept minimal and dependency-free
@@ -37,18 +34,21 @@ import kotlin.math.sin
  * and safe to build without a device on hand to visually verify against.
  */
 object Glass {
+    /** Sky blue — the dominant (~65%) tone in the two-tone glow/button palette. */
+    val skyBlue = Color(0xFF4FC3F7)
+
+    /** Deep night blue — the minority (~35%) tone. */
+    val deepBlue = Color(0xFF0B1F4B)
+
     /**
-     * "Heaven" palette for the follow-up input's glow ring: deep night blue → sky blue →
-     * golden hour yellow → sky blue → deep night blue. First and last stops match so the
-     * sweep gradient loops with no seam.
+     * Two-tone glow palette for the follow-up input's pulse ring: sky blue holding the
+     * majority of the loop, dipping into deep night blue and smoothly back — no yellow, no
+     * discrete moving marker, just a slow color wash around a fixed ring.
      */
-    val heavenColors = listOf(
-        Color(0xFF0B1F4B), // deep night blue
-        Color(0xFF4FC3F7), // sky blue
-        Color(0xFFFFD54F), // golden heaven yellow
-        Color(0xFF4FC3F7), // sky blue
-        Color(0xFF0B1F4B), // deep night blue (closes the loop)
-    )
+    val heavenColors = listOf(skyBlue, deepBlue, skyBlue)
+
+    /** Stop positions paired with [heavenColors] — 0 → 0.65 → 1.0, giving sky blue the majority presence. */
+    val heavenStops = floatArrayOf(0f, 0.65f, 1f)
 
     val panelShape = RoundedCornerShape(28.dp)
     val pillShape = RoundedCornerShape(50)
@@ -58,12 +58,13 @@ object Glass {
      * Deliberately much closer to solid than a true see-through pane of glass — with
      * dense verse text sitting directly behind it, a lighter/more transparent fill
      * made the panel's own text unreadable, so legibility wins over transparency here.
+     * Pushed a little more opaque than earlier passes so text reliably reads over it.
      */
     fun panelBrush(): Brush = Brush.linearGradient(
         colors = listOf(
-            Color.White.copy(alpha = 0.97f),
-            Color.White.copy(alpha = 0.90f),
-            Color.White.copy(alpha = 0.95f),
+            Color.White.copy(alpha = 0.985f),
+            Color.White.copy(alpha = 0.94f),
+            Color.White.copy(alpha = 0.975f),
         ),
     )
 
@@ -75,36 +76,28 @@ object Glass {
         ),
     )
 
+    /** Sky-blue → deep-blue button fill — the "heaven" aesthetic applied to key tappable buttons (not text). */
+    fun buttonBrush(): Brush = Brush.linearGradient(colors = listOf(skyBlue, deepBlue))
 }
 
 /**
- * Draws a slow, "heavenly" loading-style pulse around the content: a sweep gradient through
- * [Glass.heavenColors] that continuously rotates around the ring — so every color is visible
- * at once, just with more influence at different points around the loop at any given moment —
- * plus a soft bright "blare" flare that travels with it, and a gentle overall brightness
- * breathing on top. Used as the "Gemini is ready" cue on the follow-up input.
+ * Draws a slow, "heavenly" pulse around the content: the ring's geometry stays put (no
+ * rotation of any shape or marker — nothing that reads as a clock hand sweeping around) while
+ * the two-tone sky-blue/deep-blue color underneath breathes in brightness. Used as the "Gemini
+ * is ready" cue on the follow-up input.
  */
 @Composable
 fun Modifier.geminiGlowBorder(
     strokeWidth: Dp = 2.2.dp,
     cornerRadius: Dp = 28.dp,
-    durationMillis: Int = 7000,
+    durationMillis: Int = 4200,
 ): Modifier {
     val transition = rememberInfiniteTransition(label = "geminiGlow")
-    val rotationDegrees by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "rotation",
-    )
     val pulseAlpha by transition.animateFloat(
-        initialValue = 0.6f,
+        initialValue = 0.55f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis / 2, easing = LinearEasing),
+            animation = tween(durationMillis, easing = LinearEasing),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "pulseAlpha",
@@ -116,37 +109,15 @@ fun Modifier.geminiGlowBorder(
             val strokePx = strokeWidth.toPx()
             val inset = strokePx / 2f
             val center = Offset(size.width / 2f, size.height / 2f)
-            val ringBrush = Brush.sweepGradient(colors = Glass.heavenColors, center = center)
-
-            rotate(degrees = rotationDegrees, pivot = center) {
-                drawRoundRect(
-                    brush = ringBrush,
-                    topLeft = Offset(inset, inset),
-                    size = Size(size.width - strokePx, size.height - strokePx),
-                    cornerRadius = CornerRadius(cornerRadius.toPx()),
-                    style = Stroke(width = strokePx),
-                    alpha = pulseAlpha,
-                )
-            }
-
-            // A small bright "blare" of light that travels around the ring with the sweep,
-            // like a glint catching the loop as it turns.
-            val angleRad = Math.toRadians(rotationDegrees.toDouble())
-            val rx = size.width / 2f - inset
-            val ry = size.height / 2f - inset
-            val flareCenter = Offset(
-                x = center.x + rx * cos(angleRad).toFloat(),
-                y = center.y + ry * sin(angleRad).toFloat(),
-            )
-            val flareRadius = strokePx * 3.2f
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(Color.White.copy(alpha = 0.85f * pulseAlpha), Color.White.copy(alpha = 0f)),
-                    center = flareCenter,
-                    radius = flareRadius,
-                ),
-                radius = flareRadius,
-                center = flareCenter,
+            val stops = Glass.heavenStops.zip(Glass.heavenColors).toTypedArray()
+            val ringBrush = Brush.sweepGradient(*stops, center = center)
+            drawRoundRect(
+                brush = ringBrush,
+                topLeft = Offset(inset, inset),
+                size = Size(size.width - strokePx, size.height - strokePx),
+                cornerRadius = CornerRadius(cornerRadius.toPx()),
+                style = Stroke(width = strokePx),
+                alpha = pulseAlpha,
             )
         }
 }
@@ -173,7 +144,12 @@ fun Sparkle(modifier: Modifier = Modifier, size: Dp = 14.dp) {
         }
         drawPath(
             path = path,
-            brush = Brush.linearGradient(listOf(Color(0xFF4FC3F7), Color(0xFF0B1F4B))),
+            // Sky-blue dominant with only a slight deep-blue accent at the tip.
+            brush = Brush.linearGradient(
+                0f to Glass.skyBlue,
+                0.7f to Glass.skyBlue,
+                1f to Glass.deepBlue,
+            ),
         )
     }
 }

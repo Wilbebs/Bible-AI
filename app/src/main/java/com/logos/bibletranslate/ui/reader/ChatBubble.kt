@@ -3,6 +3,7 @@ package com.logos.bibletranslate.ui.reader
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,6 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -32,7 +35,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -56,14 +59,17 @@ import com.logos.bibletranslate.ui.theme.Glass
 import com.logos.bibletranslate.ui.theme.Sparkle
 import com.logos.bibletranslate.ui.theme.geminiGlowBorder
 import com.logos.bibletranslate.ui.theme.rememberTypewriterProgress
-import kotlinx.coroutines.delay
 
-/** Endless fallback cycle once a turn's own suggestions have all been shown once. */
+/**
+ * Follow-up placeholder pool — one is picked per bubble open (via [ChatBubbleState.openSequence]),
+ * not cycled on a timer, so it stays put for the whole time this bubble is on screen.
+ */
 private val FALLBACK_FOLLOWUP_SUGGESTIONS = listOf(
     "Translate to Hebrew",
     "Translate to Greek",
     "Translate to Aramaic",
     "Translate to Latin",
+    "Deep dive on this verse",
 )
 
 /**
@@ -107,12 +113,21 @@ fun ChatBubble(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth(widthFraction)
+                // Clears the system gesture/nav bar at the bottom instead of sitting under it.
+                .navigationBarsPadding()
                 .padding(bottom = 12.dp)
                 .shadow(elevation = 24.dp, shape = Glass.panelShape, ambientColor = Color.Black.copy(alpha = 0.25f))
                 .clip(Glass.panelShape)
                 .background(Glass.panelBrush())
                 .border(width = 1.dp, brush = Glass.panelBorderBrush(), shape = Glass.panelShape)
-                .let { if (bubble.isMinimized) it.clickable { onExpand() } else it },
+                // Scoped to just the panel's own footprint (not the whole screen) — expands when
+                // minimized, otherwise just absorbs the tap so it can't leak through to the verse
+                // list or the outside-tap-to-minimize catcher behind it.
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { if (bubble.isMinimized) onExpand() },
+                ),
             color = Color.Transparent,
             shape = Glass.panelShape,
         ) {
@@ -194,24 +209,15 @@ fun ChatBubble(
                         modifier = Modifier.padding(top = 8.dp),
                     )
                 } else {
-                    // Suggestions used to sit in a chip row above the input; they now cycle
-                    // through the input's own placeholder instead, one at a time, with a
-                    // typed-up reveal — this turn's own suggestions first (tapping the arrow
-                    // asks that one directly), then looping endlessly through a fallback set
-                    // of "Translate to X" prompts once the turn's own list is exhausted.
-                    val suggestionCycle = remember(bubble.suggestedChips) {
-                        bubble.suggestedChips + FALLBACK_FOLLOWUP_SUGGESTIONS
+                    // One suggestion is picked per bubble open (via openSequence) and stays put
+                    // for as long as this bubble is on screen — no more auto-cycling on a timer.
+                    val currentSuggestion = remember(bubble.openSequence) {
+                        FALLBACK_FOLLOWUP_SUGGESTIONS[bubble.openSequence % FALLBACK_FOLLOWUP_SUGGESTIONS.size]
                     }
-                    var suggestionIndex by remember(bubble.suggestedChips) { mutableIntStateOf(0) }
-                    LaunchedEffect(suggestionCycle) {
-                        suggestionIndex = 0
-                        while (true) {
-                            delay(2800)
-                            suggestionIndex = (suggestionIndex + 1) % suggestionCycle.size
-                        }
-                    }
-                    val currentSuggestion = suggestionCycle.getOrNull(suggestionIndex)
-                    val typedSuggestion = currentSuggestion?.let { text ->
+                    val typedSuggestion = remember(bubble.openSequence) {
+                        // Typed out once when it first appears for this open; doesn't re-animate on recomposition.
+                        currentSuggestion
+                    }.let { text ->
                         val visibleChars = rememberTypewriterProgress(
                             text = text,
                             totalUnits = text.length,
@@ -221,19 +227,20 @@ fun ChatBubble(
                         text.take(visibleChars)
                     }
 
+                    var isInputFocused by remember { mutableStateOf(false) }
+
                     Row(
                         Modifier.padding(top = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // Pill-shaped glass input with a slow, "heavenly" loading-style pulse
-                        // (dark blue → sky blue → golden → sky blue → dark blue) sweeping
-                        // around the ring — the "Gemini is ready" affordance.
+                        // Pill-shaped glass input with a slow, static (non-rotating) sky-blue/
+                        // deep-blue pulse around the ring — the "Gemini is ready" affordance.
                         TextField(
                             value = bubble.followUpInput,
                             onValueChange = onInputChanged,
-                            placeholder = { Text(typedSuggestion ?: "Ask a follow-up…") },
+                            placeholder = { Text(typedSuggestion) },
                             leadingIcon = { Sparkle(size = 14.dp) },
-                            trailingIcon = if (currentSuggestion != null && bubble.followUpInput.isBlank()) {
+                            trailingIcon = if (bubble.followUpInput.isBlank()) {
                                 {
                                     IconButton(onClick = { onChipTapped(currentSuggestion) }) {
                                         Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Ask: $currentSuggestion")
@@ -244,7 +251,8 @@ fun ChatBubble(
                                 .weight(1f)
                                 .clip(Glass.pillShape)
                                 .background(Color.White.copy(alpha = 0.6f), Glass.pillShape)
-                                .geminiGlowBorder(strokeWidth = 2.2.dp, cornerRadius = 999.dp),
+                                .geminiGlowBorder(strokeWidth = 2.2.dp, cornerRadius = 999.dp)
+                                .onFocusChanged { isInputFocused = it.isFocused },
                             singleLine = true,
                             enabled = !bubble.isSendingFollowUp,
                             shape = Glass.pillShape,
@@ -255,12 +263,18 @@ fun ChatBubble(
                                 focusedIndicatorColor = Color.Transparent,
                                 unfocusedIndicatorColor = Color.Transparent,
                                 disabledIndicatorColor = Color.Transparent,
+                                // No caret at all until the user actually taps into the field.
+                                cursorColor = if (isInputFocused) MaterialTheme.colorScheme.primary else Color.Transparent,
                             ),
                         )
                         Spacer(Modifier.width(4.dp))
                         TextButton(
                             onClick = onSend,
                             enabled = !bubble.isSendingFollowUp && bubble.followUpInput.isNotBlank(),
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
+                            modifier = Modifier
+                                .clip(Glass.pillShape)
+                                .background(Glass.buttonBrush(), Glass.pillShape),
                         ) {
                             Text("Send")
                         }
@@ -283,10 +297,13 @@ private fun LanguageDropdown(
         TextButton(onClick = { expanded = true }) {
             Text("${selected.code.uppercase()} ▾", style = MaterialTheme.typography.labelMedium)
         }
+        // Plain language names only — this dropdown just switches which language the bubble
+        // replies in, it isn't a Bible-version/translation picker (that lives in the reader's
+        // top-bar language pills), so the "(translation)" suffix doesn't belong here.
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             options.forEach { language ->
                 DropdownMenuItem(
-                    text = { Text(language.displayNameWithTranslation) },
+                    text = { Text(language.displayName) },
                     onClick = {
                         onSelected(language)
                         expanded = false
