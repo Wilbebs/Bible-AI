@@ -1,5 +1,13 @@
 package com.logos.bibletranslate.ui.reader
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -17,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -24,6 +33,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.logos.bibletranslate.data.BibleLanguage
@@ -84,6 +95,16 @@ fun ReaderScreen(
             }
         },
     ) { padding ->
+        // The reader content softly defocuses (real backdrop blur, not a fake
+        // overlay) while the glass study panel is open, drawing the eye to it
+        // — mirroring how iOS 26 sheets recede the layer behind them.
+        val isBubbleOpen = uiState.chatBubble != null
+        val backdropBlur by animateDpAsState(
+            targetValue = if (isBubbleOpen) 16.dp else 0.dp,
+            animationSpec = tween(durationMillis = 350),
+            label = "backdropBlur",
+        )
+
         Box(Modifier.fillMaxSize()) {
             if (uiState.isLoading) {
                 Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
@@ -97,39 +118,56 @@ fun ReaderScreen(
                     onSelectionExtend = viewModel::onSelectionExtend,
                     onWordToggle = viewModel::onVerseWordTapped,
                     onTranslateVerse = viewModel::onTranslateVerseRequested,
+                    modifier = Modifier.blur(backdropBlur),
                 )
             }
 
-            uiState.chatBubble?.let { bubble ->
-                val verse = uiState.verses.firstOrNull { it.verse == bubble.verseNumber }
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = viewModel::onCloseBubble,
-                        ),
-                ) {
-                    ChatBubble(
-                        verseLabel = verse?.let { "${it.bookName} ${it.chapter}:${it.verse}" } ?: "",
-                        sourceLanguage = uiState.language,
-                        bubble = bubble,
-                        onClose = viewModel::onCloseBubble,
-                        onStartOver = viewModel::onStartOver,
-                        onLanguageChanged = viewModel::onBubbleLanguageChanged,
-                        onInputChanged = viewModel::onFollowUpInputChanged,
-                        onSend = viewModel::onSendFollowUp,
-                        onChipTapped = viewModel::onChipTapped,
-                        onResponseWordTapped = viewModel::onResponseWordTapped,
+            // Keep the last non-null bubble around through the exit animation
+            // so AnimatedVisibility has content to fade/scale out instead of
+            // vanishing instantly when the state flips to null.
+            var lastBubble by remember { mutableStateOf<ChatBubbleState?>(null) }
+            LaunchedEffect(uiState.chatBubble) {
+                uiState.chatBubble?.let { lastBubble = it }
+            }
+
+            AnimatedVisibility(
+                visible = isBubbleOpen,
+                enter = fadeIn(tween(220)) + scaleIn(tween(280), initialScale = 0.92f),
+                exit = fadeOut(tween(180)) + scaleOut(tween(200), targetScale = 0.95f),
+            ) {
+                val bubble = lastBubble
+                if (bubble != null) {
+                    val verse = uiState.verses.firstOrNull { it.verse == bubble.verseNumber }
+                    Box(
                         modifier = Modifier
                             .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.18f))
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null,
-                                onClick = {},
+                                onClick = viewModel::onCloseBubble,
                             ),
-                    )
+                    ) {
+                        ChatBubble(
+                            verseLabel = verse?.let { "${it.bookName} ${it.chapter}:${it.verse}" } ?: "",
+                            sourceLanguage = uiState.language,
+                            bubble = bubble,
+                            onClose = viewModel::onCloseBubble,
+                            onStartOver = viewModel::onStartOver,
+                            onLanguageChanged = viewModel::onBubbleLanguageChanged,
+                            onInputChanged = viewModel::onFollowUpInputChanged,
+                            onSend = viewModel::onSendFollowUp,
+                            onChipTapped = viewModel::onChipTapped,
+                            onResponseWordTapped = viewModel::onResponseWordTapped,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = {},
+                                ),
+                        )
+                    }
                 }
             }
         }
@@ -170,9 +208,10 @@ private fun VerseList(
     onSelectionExtend: (Int, Int) -> Unit,
     onWordToggle: (Int, Int) -> Unit,
     onTranslateVerse: (VerseData) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(padding),
+        modifier = modifier.fillMaxSize().padding(padding),
         contentPadding = PaddingValues(vertical = 4.dp, horizontal = 4.dp),
     ) {
         items(uiState.verses, key = { it.verseId }) { verse ->

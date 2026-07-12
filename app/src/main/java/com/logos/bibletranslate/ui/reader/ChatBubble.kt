@@ -1,5 +1,7 @@
 package com.logos.bibletranslate.ui.reader
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -15,15 +17,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,6 +34,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -39,6 +45,9 @@ import com.logos.bibletranslate.data.BibleLanguage
 import com.logos.bibletranslate.data.ChatMessage
 import com.logos.bibletranslate.data.ChatRole
 import com.logos.bibletranslate.data.VerseTokenizer
+import com.logos.bibletranslate.ui.theme.Glass
+import com.logos.bibletranslate.ui.theme.geminiGlowBorder
+import com.logos.bibletranslate.ui.theme.rememberTypewriterProgress
 
 /**
  * The tap/verse-translate popup as a scoped mini-chat (chat-feature-addendum).
@@ -73,13 +82,22 @@ fun ChatBubble(
     BoxWithConstraints(modifier) {
         val maxMessageListHeight = maxHeight * 0.7f
 
-        Card(
+        // A frosted "pane of glass" floating over the reader: a translucent
+        // gradient fill plus a bright rim-light border and soft shadow, in
+        // place of an opaque Material Card — the iOS-26-style glass panel.
+        Surface(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth(widthFraction)
-                .padding(bottom = 12.dp),
+                .padding(bottom = 12.dp)
+                .shadow(elevation = 24.dp, shape = Glass.panelShape, ambientColor = Color.Black.copy(alpha = 0.25f))
+                .clip(Glass.panelShape)
+                .background(Glass.panelBrush())
+                .border(width = 1.dp, brush = Glass.panelBorderBrush(), shape = Glass.panelShape),
+            color = Color.Transparent,
+            shape = Glass.panelShape,
         ) {
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
                 // Sticky header: verse label, language dropdown, close/start-over.
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -114,6 +132,7 @@ fun ChatBubble(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         onWordTapped = onResponseWordTapped,
+                        animate = !bubble.initialIsLoading,
                     )
                 }
 
@@ -150,15 +169,34 @@ fun ChatBubble(
                         modifier = Modifier.padding(top = 8.dp),
                     )
                 } else {
-                    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
+                    Row(
+                        Modifier.padding(top = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        // Pill-shaped glass input with a slowly rotating,
+                        // Google-colored glow ring — the "Gemini is ready"
+                        // affordance, echoing the Get-a-Quote glass button.
+                        TextField(
                             value = bubble.followUpInput,
                             onValueChange = onInputChanged,
-                            placeholder = { Text("Ask a follow-up...") },
-                            modifier = Modifier.weight(1f),
+                            placeholder = { Text("Ask a follow-up…") },
+                            modifier = Modifier
+                                .weight(1f)
+                                .geminiGlowBorder(strokeWidth = 1.6.dp, cornerRadius = 24.dp)
+                                .background(Color.White.copy(alpha = 0.35f), Glass.pillShape),
                             singleLine = true,
                             enabled = !bubble.isSendingFollowUp,
+                            shape = Glass.pillShape,
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                disabledContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                disabledIndicatorColor = Color.Transparent,
+                            ),
                         )
+                        Spacer(Modifier.width(4.dp))
                         TextButton(
                             onClick = onSend,
                             enabled = !bubble.isSendingFollowUp && bubble.followUpInput.isNotBlank(),
@@ -205,7 +243,12 @@ private fun ChatMessageRow(message: ChatMessage, onResponseWordTapped: (String) 
     Column(Modifier.padding(vertical = 4.dp)) {
         Text(label, style = MaterialTheme.typography.labelSmall, fontStyle = FontStyle.Italic)
         if (message.role == ChatRole.ASSISTANT) {
-            TappableWords(text = message.text, style = MaterialTheme.typography.bodyMedium, onWordTapped = onResponseWordTapped)
+            TappableWords(
+                text = message.text,
+                style = MaterialTheme.typography.bodyMedium,
+                onWordTapped = onResponseWordTapped,
+                animate = true,
+            )
         } else {
             Text(message.text, style = MaterialTheme.typography.bodyMedium)
         }
@@ -215,7 +258,8 @@ private fun ChatMessageRow(message: ChatMessage, onResponseWordTapped: (String) 
 /**
  * Renders text as individually tappable words — tapping one a user doesn't understand prefills
  * a "What does X mean in this verse?" follow-up question (tap-word-autofill clarification).
- * Used for both the initial translation and assistant chat replies.
+ * Used for both the initial translation and assistant chat replies. When [animate] is set, the
+ * words stream in one-by-one (a Gemini-style typewriter reveal) instead of appearing all at once.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -224,9 +268,18 @@ private fun TappableWords(
     style: androidx.compose.ui.text.TextStyle,
     onWordTapped: (String) -> Unit,
     fontWeight: FontWeight? = null,
+    animate: Boolean = false,
 ) {
+    val tokens = remember(text) { VerseTokenizer.tokenize(text) }
+    val visibleCount = rememberTypewriterProgress(
+        text = text,
+        totalUnits = tokens.size,
+        unitsPerTick = 1,
+        tickMillis = 55,
+        animate = animate,
+    )
     FlowRow {
-        VerseTokenizer.tokenize(text).forEach { word ->
+        tokens.take(visibleCount).forEach { word ->
             Text(
                 text = "$word ",
                 style = style,
@@ -254,7 +307,11 @@ private fun WordInfoCard(info: WordInfoState) {
                 Text("/$it/", style = MaterialTheme.typography.bodySmall, fontStyle = FontStyle.Italic, modifier = Modifier.padding(top = 2.dp))
             }
             info.definition?.let {
-                Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 2.dp))
+                com.logos.bibletranslate.ui.theme.TypewriterText(
+                    text = it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
             }
         }
     }

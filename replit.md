@@ -45,6 +45,36 @@ to actually use the app.
 No workflow is configured — there's no long-running server/port for this
 project to bind to.
 
+## Design direction
+
+Adopting an iOS-26-style "liquid glass" aesthetic, established first on the
+Gemini study-chat bubble (`ui/reader/ChatBubble.kt`) and captured as reusable
+tokens in `ui/theme/Glass.kt` for future screens to pick up:
+
+- **Glass panels**: translucent gradient fill + bright rim-light border +
+  soft shadow on a large (28dp) rounded shape (`Glass.panelShape`,
+  `Glass.panelBrush()`, `Glass.panelBorderBrush()`), instead of an opaque
+  Material `Card`. No third-party blur library is used — real backdrop blur
+  is done natively via `Modifier.blur()` on the content behind the sheet
+  (animated in/out with the sheet), which needs no dependency and degrades
+  gracefully (no-op) below API 31.
+- **Motion**: the chat bubble enters/exits with `AnimatedVisibility`
+  (fade + scale) in `ReaderScreen.kt`, and the backdrop blur radius animates
+  in step with it — modeled on iOS sheet presentation.
+- **Gemini glow**: the follow-up input is a pill-shaped glass field ringed by
+  a slowly rotating sweep gradient cycling Google's brand colors
+  (`Modifier.geminiGlowBorder()`), referencing the Gemini/Bard loading
+  indicator.
+- **Typewriter reveal**: assistant replies and word definitions stream in
+  incrementally (`rememberTypewriterProgress` / `TypewriterText` in
+  `ui/theme/Glass.kt`) instead of appearing all at once — word-by-word for
+  tappable text (so tap targets stay intact), character-by-character for
+  plain text.
+
+This is the first pass — the reader's top bar, language pills, and verse
+list still use default Material styling and are natural next candidates if
+the glass look should extend further.
+
 ## User preferences
 
 None recorded yet.
