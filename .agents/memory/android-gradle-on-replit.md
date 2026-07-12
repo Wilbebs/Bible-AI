@@ -10,9 +10,12 @@ There is no Android SDK Nix/Replit module (`installSystemDependencies` has no
    The default Replit Java module (`java-graalvm22.3`, GraalVM/JDK 19) fails
    Android's Gradle build at the `androidJdkImage` transform — its `jlink`
    can't process `core-for-system-modules.jar`. Must use a plain JDK 17
-   instead, pointed to via `org.gradle.java.home` in `gradle.properties`
-   (find the exact Nix store path with
-   `find /nix/store -maxdepth 1 -iname "openjdk-17*"`).
+   instead, pointed to via `org.gradle.java.home` (find the exact Nix store
+   path with `find /nix/store -maxdepth 1 -iname "openjdk-17*"`) — but set
+   that property in the user-level `~/.gradle/gradle.properties`, NOT the
+   project's committed `gradle.properties`. A hardcoded Nix store path in the
+   committed file breaks the build immediately on any other machine
+   (Android Studio, CI, another dev) with "Java home supplied is invalid".
 2. Download the Android command-line tools zip directly from
    `dl.google.com/android/repository/commandlinetools-linux-*_latest.zip`
    into the project (e.g. `.android-sdk/`, gitignored — it's ~450MB+), then
