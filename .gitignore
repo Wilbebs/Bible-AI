@@ -9,3 +9,5 @@
 .cxx
 app/build/
 .kotlin/
+.android-sdk/
+

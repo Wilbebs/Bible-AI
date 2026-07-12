@@ -28,8 +28,16 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        buildConfigField("String", "GEMINI_API_KEY", "\"${localProperties.getProperty("gemini.api.key", "")}\"")
-        buildConfigField("String", "TRANSLATE_API_KEY", "\"${localProperties.getProperty("translate.api.key", "")}\"")
+        // Falls back to Replit Secrets (env vars) when local.properties doesn't
+        // define the key — keeps the same dev-time-only, no-in-app-UI model
+        // while letting the Replit environment supply keys via its secrets store.
+        val geminiKey = localProperties.getProperty("gemini.api.key")
+            ?: System.getenv("GEMINI_API_KEY") ?: ""
+        val translateKey = localProperties.getProperty("translate.api.key")
+            ?: System.getenv("TRANSLATE_API_KEY") ?: ""
+
+        buildConfigField("String", "GEMINI_API_KEY", "\"$geminiKey\"")
+        buildConfigField("String", "TRANSLATE_API_KEY", "\"$translateKey\"")
     }
 
     // Bundled Bible SQLite assets are not compressed further by AAPT.
