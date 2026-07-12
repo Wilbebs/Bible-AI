@@ -1,0 +1,1 @@
+- [Building Android/Gradle apps on Replit](android-gradle-on-replit.md) — no SDK module exists; manual sdkmanager install + JDK 17 pin needed, no emulator available.
