@@ -60,29 +60,44 @@ tokens in `ui/theme/Glass.kt` for future screens to pick up:
 - **Motion**: the chat bubble enters/exits with `AnimatedVisibility`
   (fade + scale) in `ReaderScreen.kt`, modeled on iOS sheet presentation.
 - **Gemini glow**: the follow-up input is a pill-shaped glass field ringed by
-  a still (non-rotating) border whose color slowly cycles through Google's
-  brand colors (`Modifier.geminiGlowBorder()` / `Glass.colorAtCyclePosition()`),
-  referencing the Gemini/Bard loading indicator's palette without the motion.
+  a rotating sweep-gradient "heaven" pulse — deep navy → sky blue → golden
+  yellow → sky blue → deep navy (`Modifier.geminiGlowBorder()` /
+  `Glass.heavenColors`) — with a breathing alpha and a small bright "blare"
+  flare that travels around the ring with the sweep, so every color stays
+  visible at once with shifting emphasis rather than the ring changing to a
+  single solid color over time.
 - **Typewriter reveal**: assistant replies and word definitions stream in
   incrementally (`rememberTypewriterProgress` / `TypewriterText` in
   `ui/theme/Glass.kt`) instead of appearing all at once — word-by-word for
   tappable text (so tap targets stay intact), character-by-character for
-  plain text.
+  plain text. Follow-up input placeholders reuse the same helper for a
+  "typed-up" reveal as each suggestion cycles in.
 - **Bubble dismissal**: tapping outside the panel *minimizes* it to just the
   word/verse translation and header controls (conversation history kept) —
   a separate `isMinimized` state from "Delete chat" (`onStartOver`, which
   clears history). Tapping the collapsed panel expands it again; only the
   explicit "✕" fully closes it (`ReaderScreen.kt` / `ReaderViewModel.kt`).
-- **AI bling**: a "✨" sparkle marks the panel header and the follow-up
-  input's leading icon as Gemini-branded touches.
+- **AI bling**: a procedural sky-blue → dark-blue gradient sparkle
+  (`Glass.Sparkle()`) marks the panel header and the follow-up input's
+  leading icon, drawn with `Canvas`/`Path` instead of the "✨" emoji so it can
+  actually be tinted to match the brand palette.
 - **Follow-up suggestions**: no longer a chip row above the input — they
-  cycle through the input's own placeholder one at a time (tap the trailing
-  arrow to ask that one), settling back on the plain "Ask a follow-up…"
-  placeholder once they've all been shown.
+  cycle through the input's own placeholder with a typed-up reveal, one at a
+  time (tap the trailing arrow to ask that one). This turn's own suggestions
+  play first, then the cycle loops forever through a fallback set of
+  "Translate to Hebrew/Greek/Aramaic/Latin" prompts rather than settling on a
+  static placeholder.
+- **Top bar navigation**: a single `[Book Chapter ▾]` button opens a fluid
+  two-step picker (pick a book, then a chapter from a tappable chip grid,
+  with "Back" between steps) — replacing the old separate book/chapter
+  buttons. A weighted spacer reserves center space for a future logo. The
+  right side has a compact exact-verse search pill (`Book chapter:verse`,
+  e.g. `John 3:16`) with book-name autosuggest; submitting navigates there
+  and pulses the destination verse's words with a slow sky-blue/dark-navy
+  animation for a few seconds before clearing itself.
 
-This is the first pass — the reader's top bar and verse list still use
-default Material styling and are natural next candidates if the glass look
-should extend further.
+The reader's verse list body still uses default Material styling and is a
+natural next candidate if the glass look should extend further.
 
 ## Known environment limitation: Gemini network errors on-device
 
