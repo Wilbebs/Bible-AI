@@ -190,8 +190,11 @@ class ReaderViewModel(
         val questionText = buildAutofillQuestion(newQueue.map { tokens[it] })
         val updatedBubble = bubble.copy(queuedWordIndices = newQueue, followUpInput = questionText)
         if (newQueue.size == 1) {
-            _uiState.value = state.copy(chatBubble = updatedBubble)
-            fetchWordInfoAsync(verse, tokens[newQueue.first()], state.language)
+            val word = tokens[newQueue.first()]
+            // Show the loading state the moment the word is tapped, before the network
+            // call resolves, so a definition visibly starts generating right away.
+            _uiState.value = state.copy(chatBubble = updatedBubble.copy(wordInfo = WordInfoState(word, isLoading = true)))
+            fetchWordInfoAsync(verse, word, state.language)
         } else {
             _uiState.value = state.copy(chatBubble = clearWordInfo(updatedBubble))
         }
@@ -227,9 +230,14 @@ class ReaderViewModel(
             manualLanguageOverride = true,
         )
         if (newQueue.size == 1) {
-            _uiState.value = state.copy(chatBubble = updatedBubble)
             val verse = state.verses.firstOrNull { it.verse == bubble.verseNumber }
-            if (verse != null) fetchWordInfoAsync(verse, newQueue.first(), state.targetLanguage)
+            if (verse != null) {
+                // Same immediate-loading treatment as a verse-text tap (§3).
+                _uiState.value = state.copy(chatBubble = updatedBubble.copy(wordInfo = WordInfoState(newQueue.first(), isLoading = true)))
+                fetchWordInfoAsync(verse, newQueue.first(), state.targetLanguage)
+            } else {
+                _uiState.value = state.copy(chatBubble = updatedBubble)
+            }
         } else {
             _uiState.value = state.copy(chatBubble = clearWordInfo(updatedBubble))
         }
@@ -422,7 +430,7 @@ class ReaderViewModel(
                         },
                         onFailure = { err ->
                             current.copy(
-                                messages = current.messages + ChatMessage(ChatRole.ASSISTANT, "Sorry, that failed: ${err.message}"),
+                                messages = current.messages + ChatMessage(ChatRole.ASSISTANT, "Sorry, that failed: ${err.message}", isError = true),
                                 isSendingFollowUp = false,
                             )
                         },
@@ -472,7 +480,7 @@ class ReaderViewModel(
                     },
                     onFailure = { err ->
                         current.copy(
-                            messages = current.messages + ChatMessage(ChatRole.ASSISTANT, "Sorry, that failed: ${err.message}"),
+                            messages = current.messages + ChatMessage(ChatRole.ASSISTANT, "Sorry, that failed: ${err.message}", isError = true),
                             isSendingFollowUp = false,
                         )
                     },
@@ -503,12 +511,20 @@ class ReaderViewModel(
 
     /**
      * Fires a live lookup whenever exactly one word is in focus (verse tap or response-word
-     * tap), grounded in the verse it appears in for the correct sense. Silently does nothing
-     * without a Gemini key — the rest of the bubble still works.
+     * tap), grounded in the verse it appears in for the correct sense. Callers already put a
+     * loading [WordInfoState] into the bubble synchronously before calling this, so the "looking
+     * up…" state is visible immediately — this just resolves it once the network call returns.
+     * Silently leaves it at "no definition" without a Gemini key — the rest of the bubble still
+     * works.
      */
     private fun fetchWordInfoAsync(verse: VerseData, word: String, language: BibleLanguage) {
-        val apiKey = ApiKeys.geminiApiKey ?: return
         val myId = ++wordInfoRequestId
+        val apiKey = ApiKeys.geminiApiKey
+        if (apiKey == null) {
+            val current = _uiState.value.chatBubble ?: return
+            _uiState.value = _uiState.value.copy(chatBubble = current.copy(wordInfo = WordInfoState(word, isLoading = false)))
+            return
+        }
         val verseRef = "${verse.bookName} ${verse.chapter}:${verse.verse}"
         viewModelScope.launch {
             val result = verseChatClient.fetchWordInfo(apiKey, word, language.displayName, verseRef, verse.text)
@@ -543,18 +559,21 @@ class ReaderViewModel(
         val myRequestId = ++liveCallRequestId
 
         // A lone word gets a pronunciation + definition card, regardless of which translation
-        // path handles the rest (tap-word-autofill clarification: single-word focus).
-        if (clamped.first == clamped.last) {
-            fetchWordInfoAsync(verse, tokens[clamped.first], state.language)
-        } else {
-            wordInfoRequestId++ // no single word in focus; invalidate any stale in-flight fetch
-        }
+        // path handles the rest (tap-word-autofill clarification: single-word focus). The
+        // WordInfoState is baked into the ChatBubbleState below (constructed with isLoading =
+        // true) *before* the network call starts, so the "looking up…" state is visible the
+        // instant the bubble opens rather than only after the request resolves — and so it
+        // isn't clobbered by the ChatBubbleState construction that follows it.
+        val singleWord: String? = if (clamped.first == clamped.last) tokens[clamped.first] else null
+        val initialWordInfo = singleWord?.let { WordInfoState(it, isLoading = true) }
+        if (singleWord == null) wordInfoRequestId++ // no single word in focus; invalidate any stale in-flight fetch
 
         if (hasData) {
             val text = parts.filterNotNull().distinctFromNeighbors().joinToString(" ")
             _uiState.value = state.copy(
-                chatBubble = ChatBubbleState(verseNumber, clamped, state.targetLanguage, text, initialHasData = true),
+                chatBubble = ChatBubbleState(verseNumber, clamped, state.targetLanguage, text, initialHasData = true, wordInfo = initialWordInfo),
             )
+            singleWord?.let { fetchWordInfoAsync(verse, it, state.language) }
             return
         }
 
@@ -564,17 +583,19 @@ class ReaderViewModel(
                 _uiState.value = state.copy(
                     chatBubble = ChatBubbleState(
                         verseNumber, clamped, state.targetLanguage,
-                        "No Gemini API key configured for this build.", initialHasData = false,
+                        "No Gemini API key configured for this build.", initialHasData = false, wordInfo = initialWordInfo,
                     ),
                 )
+                singleWord?.let { fetchWordInfoAsync(verse, it, state.language) }
                 return
             }
             val selectedText = clamped.joinToString(" ") { tokens[it] }
             _uiState.value = state.copy(
                 chatBubble = ChatBubbleState(
-                    verseNumber, clamped, state.targetLanguage, "Translating…", initialHasData = false, initialIsLoading = true,
+                    verseNumber, clamped, state.targetLanguage, "Translating…", initialHasData = false, initialIsLoading = true, wordInfo = initialWordInfo,
                 ),
             )
+            singleWord?.let { fetchWordInfoAsync(verse, it, state.language) }
             viewModelScope.launch {
                 val cached = liveTranslationCache.get(verse.numericVerseId, state.language, state.targetLanguage, clamped.first, clamped.last)
                 if (cached != null) {
@@ -592,17 +613,19 @@ class ReaderViewModel(
                 _uiState.value = state.copy(
                     chatBubble = ChatBubbleState(
                         verseNumber, clamped, state.targetLanguage,
-                        "No Translation API key configured for this build.", initialHasData = false,
+                        "No Translation API key configured for this build.", initialHasData = false, wordInfo = initialWordInfo,
                     ),
                 )
+                singleWord?.let { fetchWordInfoAsync(verse, it, state.language) }
                 return
             }
             val selectedWords = clamped.map { tokens[it] }
             _uiState.value = state.copy(
                 chatBubble = ChatBubbleState(
-                    verseNumber, clamped, state.targetLanguage, "Translating…", initialHasData = false, initialIsLoading = true,
+                    verseNumber, clamped, state.targetLanguage, "Translating…", initialHasData = false, initialIsLoading = true, wordInfo = initialWordInfo,
                 ),
             )
+            singleWord?.let { fetchWordInfoAsync(verse, it, state.language) }
             viewModelScope.launch {
                 val cached = liveTranslationCache.get(verse.numericVerseId, state.language, state.targetLanguage, clamped.first, clamped.last)
                 if (cached != null) {
@@ -615,8 +638,9 @@ class ReaderViewModel(
         }
 
         _uiState.value = state.copy(
-            chatBubble = ChatBubbleState(verseNumber, clamped, state.targetLanguage, "No word-level translation yet", initialHasData = false),
+            chatBubble = ChatBubbleState(verseNumber, clamped, state.targetLanguage, "No word-level translation yet", initialHasData = false, wordInfo = initialWordInfo),
         )
+        singleWord?.let { fetchWordInfoAsync(verse, it, state.language) }
     }
 
     /** The "direct Gemini calls, non-preprocessed" experiment arm (Leviticus) — one live call per tap, with verse context. */

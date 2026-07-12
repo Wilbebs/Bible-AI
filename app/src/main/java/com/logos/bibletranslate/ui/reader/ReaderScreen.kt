@@ -1,7 +1,6 @@
 package com.logos.bibletranslate.ui.reader
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -33,7 +32,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -95,15 +93,10 @@ fun ReaderScreen(
             }
         },
     ) { padding ->
-        // The reader content softly defocuses (real backdrop blur, not a fake
-        // overlay) while the glass study panel is open, drawing the eye to it
-        // — mirroring how iOS 26 sheets recede the layer behind them.
+        // Verse text stays fully readable behind the glass study panel — no
+        // backdrop blur — the panel's own translucency and shadow are enough
+        // to read as "floating above" the content without obscuring it.
         val isBubbleOpen = uiState.chatBubble != null
-        val backdropBlur by animateDpAsState(
-            targetValue = if (isBubbleOpen) 16.dp else 0.dp,
-            animationSpec = tween(durationMillis = 350),
-            label = "backdropBlur",
-        )
 
         Box(Modifier.fillMaxSize()) {
             if (uiState.isLoading) {
@@ -118,7 +111,6 @@ fun ReaderScreen(
                     onSelectionExtend = viewModel::onSelectionExtend,
                     onWordToggle = viewModel::onVerseWordTapped,
                     onTranslateVerse = viewModel::onTranslateVerseRequested,
-                    modifier = Modifier.blur(backdropBlur),
                 )
             }
 
@@ -145,7 +137,10 @@ fun ReaderScreen(
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null,
-                                onClick = viewModel::onCloseBubble,
+                                // Tapping outside the panel collapses the conversation back to
+                                // the word's original translation rather than closing the panel
+                                // entirely — only the explicit "✕" fully dismisses it.
+                                onClick = viewModel::onStartOver,
                             ),
                     ) {
                         ChatBubble(
@@ -212,7 +207,11 @@ private fun VerseList(
 ) {
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(padding),
-        contentPadding = PaddingValues(vertical = 4.dp, horizontal = 4.dp),
+        // Extra breathing room on the left specifically — Android's edge-swipe-back
+        // gesture zone sits right at the screen edge, and verse text starting flush
+        // against it means a normal reading tap/swipe near the margin can trigger
+        // the system back gesture instead of selecting a word.
+        contentPadding = PaddingValues(start = 20.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
     ) {
         items(uiState.verses, key = { it.verseId }) { verse ->
             val tokens = remember(verse.verseId) { VerseTokenizer.tokenize(verse.text) }

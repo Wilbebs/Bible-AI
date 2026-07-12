@@ -1,10 +1,13 @@
 package com.logos.bibletranslate.data
 
-enum class BibleLanguage(val code: String, val displayName: String, val assetFileName: String) {
-    EN("en", "English", "kjv.db"),
-    ES("es", "Español", "rv1909.db"),
-    PT("pt", "Português", "almeida1911.db"),
+enum class BibleLanguage(val code: String, val displayName: String, val assetFileName: String, val translationName: String) {
+    EN("en", "English", "kjv.db", "KJV"),
+    ES("es", "Español", "rv1909.db", "Reina Valera 1909"),
+    PT("pt", "Português", "almeida1911.db", "Almeida 1911"),
     ;
+
+    /** e.g. "Español (Reina Valera 1909)" — shown in language pickers so the actual translation is clear, not just the language. */
+    val displayNameWithTranslation: String get() = "$displayName ($translationName)"
 
     companion object {
         fun fromCode(code: String): BibleLanguage? = entries.firstOrNull { it.code.equals(code, ignoreCase = true) }

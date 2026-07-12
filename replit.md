@@ -54,26 +54,38 @@ tokens in `ui/theme/Glass.kt` for future screens to pick up:
 - **Glass panels**: translucent gradient fill + bright rim-light border +
   soft shadow on a large (28dp) rounded shape (`Glass.panelShape`,
   `Glass.panelBrush()`, `Glass.panelBorderBrush()`), instead of an opaque
-  Material `Card`. No third-party blur library is used — real backdrop blur
-  is done natively via `Modifier.blur()` on the content behind the sheet
-  (animated in/out with the sheet), which needs no dependency and degrades
-  gracefully (no-op) below API 31.
+  Material `Card`. No backdrop blur is used behind the panel — the verses
+  stay fully readable while the bubble is open; the panel's own
+  translucency/shadow is what reads as "floating above" the content.
 - **Motion**: the chat bubble enters/exits with `AnimatedVisibility`
-  (fade + scale) in `ReaderScreen.kt`, and the backdrop blur radius animates
-  in step with it — modeled on iOS sheet presentation.
+  (fade + scale) in `ReaderScreen.kt`, modeled on iOS sheet presentation.
 - **Gemini glow**: the follow-up input is a pill-shaped glass field ringed by
-  a slowly rotating sweep gradient cycling Google's brand colors
-  (`Modifier.geminiGlowBorder()`), referencing the Gemini/Bard loading
-  indicator.
+  a still (non-rotating) border whose color slowly cycles through Google's
+  brand colors (`Modifier.geminiGlowBorder()` / `Glass.colorAtCyclePosition()`),
+  referencing the Gemini/Bard loading indicator's palette without the motion.
 - **Typewriter reveal**: assistant replies and word definitions stream in
   incrementally (`rememberTypewriterProgress` / `TypewriterText` in
   `ui/theme/Glass.kt`) instead of appearing all at once — word-by-word for
   tappable text (so tap targets stay intact), character-by-character for
   plain text.
+- **Bubble dismissal**: tapping outside the panel calls the same logic as
+  "Delete chat" collapse-to-original-translation (`onStartOver`) rather than
+  closing it — only the explicit "✕" fully dismisses the bubble
+  (`ReaderScreen.kt`).
 
-This is the first pass — the reader's top bar, language pills, and verse
-list still use default Material styling and are natural next candidates if
-the glass look should extend further.
+This is the first pass — the reader's top bar and verse list still use
+default Material styling and are natural next candidates if the glass look
+should extend further.
+
+## Known environment limitation: Gemini network errors on-device
+
+If a device/emulator shows "Unable to resolve host 'generativelanguage.googleapis.com'"
+in the chat bubble, that's a DNS/network failure on that specific device (no
+internet access reaching Google's API), not an app bug — `INTERNET` permission
+is declared and the request code is unchanged. Failed AI responses are now
+flagged as errors (`ChatMessage.isError`) and rendered as plain, non-tappable
+text so a failure message can't itself be tapped and looked up as if it were
+real verse content.
 
 ## User preferences
 

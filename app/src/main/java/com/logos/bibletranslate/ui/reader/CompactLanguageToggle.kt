@@ -141,7 +141,7 @@ private fun LanguagePill(
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             options.forEach { language ->
                 DropdownMenuItem(
-                    text = { Text(language.displayName) },
+                    text = { Text(language.displayNameWithTranslation) },
                     onClick = {
                         onSelected(language)
                         expanded = false

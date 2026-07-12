@@ -17,9 +17,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SuggestionChip
@@ -110,7 +114,9 @@ fun ChatBubble(
                         selected = bubble.bubbleTargetLanguage,
                         onSelected = onLanguageChanged,
                     )
-                    TextButton(onClick = onStartOver) { Text("Start Over") }
+                    IconButton(onClick = onStartOver) {
+                        Icon(Icons.Filled.Delete, contentDescription = "Delete chat")
+                    }
                     TextButton(onClick = onClose) { Text("✕") }
                 }
 
@@ -225,7 +231,7 @@ private fun LanguageDropdown(
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             options.forEach { language ->
                 DropdownMenuItem(
-                    text = { Text(language.displayName) },
+                    text = { Text(language.displayNameWithTranslation) },
                     onClick = {
                         onSelected(language)
                         expanded = false
@@ -242,12 +248,23 @@ private fun ChatMessageRow(message: ChatMessage, onResponseWordTapped: (String) 
     val label = if (message.role == ChatRole.USER) "You" else "Assistant"
     Column(Modifier.padding(vertical = 4.dp)) {
         Text(label, style = MaterialTheme.typography.labelSmall, fontStyle = FontStyle.Italic)
-        if (message.role == ChatRole.ASSISTANT) {
+        if (message.role == ChatRole.ASSISTANT && !message.isError) {
             TappableWords(
                 text = message.text,
                 style = MaterialTheme.typography.bodyMedium,
                 onWordTapped = onResponseWordTapped,
                 animate = true,
+            )
+        } else if (message.isError) {
+            // Failed responses are plain, non-tappable text (not treated as
+            // AI-generated content to tap into a definition lookup) so a
+            // network/API error message can't itself be mistaken for verse
+            // content and looked up as if it were a real word.
+            Text(
+                message.text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                fontStyle = FontStyle.Italic,
             )
         } else {
             Text(message.text, style = MaterialTheme.typography.bodyMedium)

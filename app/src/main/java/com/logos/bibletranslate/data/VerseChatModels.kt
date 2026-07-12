@@ -4,6 +4,8 @@ package com.logos.bibletranslate.data
 data class ChatMessage(
     val role: ChatRole,
     val text: String,
+    /** Set for a failed-request message (e.g. network error) so the UI can render it as plain, non-tappable text instead of AI content. */
+    val isError: Boolean = false,
 )
 
 enum class ChatRole { USER, ASSISTANT }

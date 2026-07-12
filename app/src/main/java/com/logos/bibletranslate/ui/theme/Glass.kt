@@ -21,7 +21,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -60,12 +60,21 @@ object Glass {
             Color.White.copy(alpha = 0.15f),
         ),
     )
+
+    /** Interpolates a solid color at [position] along [brandColors] (0f..brandColors.lastIndex), for a still ring that only shifts color. */
+    fun colorAtCyclePosition(position: Float): Color {
+        val clamped = position.coerceIn(0f, (brandColors.size - 1).toFloat())
+        val index = clamped.toInt().coerceAtMost(brandColors.size - 2)
+        val fraction = clamped - index
+        return lerp(brandColors[index], brandColors[index + 1], fraction)
+    }
 }
 
 /**
- * Draws a slowly rotating, multi-color glow ring around the content — the
- * "Gemini thinking" cue used on the follow-up input, cycling through Google's
- * brand colors like the Gemini/Bard loading indicator.
+ * Draws a still (non-rotating) border around the content whose color slowly
+ * cycles through Google's brand colors — the "Gemini is ready" cue used on
+ * the follow-up input. The ring itself never moves or spins; only its color
+ * shifts, like the Gemini/Bard loading indicator's palette without the motion.
  */
 @Composable
 fun Modifier.geminiGlowBorder(
@@ -74,31 +83,29 @@ fun Modifier.geminiGlowBorder(
     durationMillis: Int = 5000,
 ): Modifier {
     val transition = rememberInfiniteTransition(label = "geminiGlow")
-    val angle by transition.animateFloat(
+    val colorPosition by transition.animateFloat(
         initialValue = 0f,
-        targetValue = 360f,
+        targetValue = (Glass.brandColors.size - 1).toFloat(),
         animationSpec = infiniteRepeatable(
             animation = tween(durationMillis, easing = LinearEasing),
             repeatMode = RepeatMode.Restart,
         ),
-        label = "angle",
+        label = "colorPosition",
     )
-    val brush = Brush.sweepGradient(Glass.brandColors)
+    val color = Glass.colorAtCyclePosition(colorPosition)
     return this
         .clip(RoundedCornerShape(cornerRadius))
         .drawWithContent {
             drawContent()
             val strokePx = strokeWidth.toPx()
             val inset = strokePx / 2f
-            rotate(angle) {
-                drawRoundRect(
-                    brush = brush,
-                    topLeft = Offset(inset, inset),
-                    size = Size(size.width - strokePx, size.height - strokePx),
-                    cornerRadius = CornerRadius(cornerRadius.toPx()),
-                    style = Stroke(width = strokePx),
-                )
-            }
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(inset, inset),
+                size = Size(size.width - strokePx, size.height - strokePx),
+                cornerRadius = CornerRadius(cornerRadius.toPx()),
+                style = Stroke(width = strokePx),
+            )
         }
 }
 
