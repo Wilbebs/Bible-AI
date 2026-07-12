@@ -6,14 +6,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -77,17 +75,11 @@ fun ReaderScreen(
                         }
                     },
                 )
-                LabeledLanguageToggle(
-                    label = "Reading",
-                    options = BibleLanguage.entries,
-                    selected = uiState.language,
-                    onSelected = viewModel::onLanguageSelected,
-                )
-                LabeledLanguageToggle(
-                    label = "Translate to",
-                    options = BibleLanguage.entries.filter { it != uiState.language },
-                    selected = uiState.targetLanguage,
-                    onSelected = viewModel::onTargetLanguageSelected,
+                LanguagePairSelector(
+                    readingLanguage = uiState.language,
+                    targetLanguage = uiState.targetLanguage,
+                    onReadingSelected = viewModel::onLanguageSelected,
+                    onTargetSelected = viewModel::onTargetLanguageSelected,
                 )
             }
         },
@@ -171,19 +163,6 @@ fun ReaderScreen(
 }
 
 @Composable
-private fun LabeledLanguageToggle(
-    label: String,
-    options: List<BibleLanguage>,
-    selected: BibleLanguage,
-    onSelected: (BibleLanguage) -> Unit,
-) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)) {
-        Text(label, style = MaterialTheme.typography.labelSmall)
-        CompactLanguageToggle(options = options, selected = selected, onSelected = onSelected)
-    }
-}
-
-@Composable
 private fun VerseList(
     uiState: ReaderUiState,
     padding: PaddingValues,
@@ -194,7 +173,7 @@ private fun VerseList(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(padding),
-        contentPadding = PaddingValues(vertical = 8.dp, horizontal = 8.dp),
+        contentPadding = PaddingValues(vertical = 4.dp, horizontal = 4.dp),
     ) {
         items(uiState.verses, key = { it.verseId }) { verse ->
             val tokens = remember(verse.verseId) { VerseTokenizer.tokenize(verse.text) }

@@ -1,18 +1,16 @@
 package com.logos.bibletranslate.ui.reader
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
@@ -49,20 +47,22 @@ fun VerseRow(
     val toggleModeState = rememberUpdatedState(bubbleOpenForThisVerse)
 
     Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-        TextButton(onClick = onTranslateVerse, modifier = Modifier.width(40.dp)) {
-            Text("T", style = MaterialTheme.typography.labelSmall)
-        }
-        Column {
-            Text(
-                text = "${verse.verse}",
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(top = 14.dp, end = 4.dp),
-            )
-        }
+        // Verse number doubles as the "show this verse in the other two languages"
+        // affordance (previously a separate "T" button) — tinted like a link so
+        // it still reads as tappable, but it no longer eats a fixed 40dp column,
+        // letting the verse text start almost flush with the screen edge.
+        Text(
+            text = "${verse.verse}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+                .padding(top = 7.dp, end = 3.dp)
+                .clickable(onClick = onTranslateVerse),
+        )
         FlowRow(
             modifier = Modifier
                 .weight(1f)
-                .padding(vertical = 6.dp)
+                .padding(vertical = 3.dp)
                 .pointerInput(verse.verseId) {
                     awaitEachGesture {
                         val down = awaitFirstDown()

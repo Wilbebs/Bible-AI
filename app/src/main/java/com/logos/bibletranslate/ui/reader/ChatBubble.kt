@@ -64,7 +64,11 @@ fun ChatBubble(
     modifier: Modifier = Modifier,
 ) {
     val hasConversation = bubble.messages.isNotEmpty()
-    val widthFraction = if (hasConversation) 0.9f else 0.75f
+    // Nearly edge-to-edge (94%) regardless of conversation state — this is a
+    // sheet-like study panel, not a floating chat bubble, so it should read as
+    // part of the screen rather than a small popover shrinking the verse
+    // text's usable width behind it.
+    val widthFraction = 0.94f
 
     BoxWithConstraints(modifier) {
         val maxMessageListHeight = maxHeight * 0.7f
@@ -73,9 +77,9 @@ fun ChatBubble(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth(widthFraction)
-                .padding(bottom = 16.dp),
+                .padding(bottom = 12.dp),
         ) {
-            Column(Modifier.padding(12.dp)) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
                 // Sticky header: verse label, language dropdown, close/start-over.
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -92,7 +96,7 @@ fun ChatBubble(
                     TextButton(onClick = onClose) { Text("✕") }
                 }
 
-                Spacer(Modifier.padding(top = 4.dp))
+                Spacer(Modifier.padding(top = 6.dp))
 
                 // Single-word focus: bolded/larger, with pronunciation + a real definition,
                 // shown up top regardless of whether it came from the verse text or a reply.
