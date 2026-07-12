@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -26,13 +27,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -44,6 +46,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.logos.bibletranslate.data.BibleLanguage
 import com.logos.bibletranslate.data.ChatMessage
@@ -52,6 +55,7 @@ import com.logos.bibletranslate.data.VerseTokenizer
 import com.logos.bibletranslate.ui.theme.Glass
 import com.logos.bibletranslate.ui.theme.geminiGlowBorder
 import com.logos.bibletranslate.ui.theme.rememberTypewriterProgress
+import kotlinx.coroutines.delay
 
 /**
  * The tap/verse-translate popup as a scoped mini-chat (chat-feature-addendum).
@@ -69,6 +73,7 @@ fun ChatBubble(
     bubble: ChatBubbleState,
     onClose: () -> Unit,
     onStartOver: () -> Unit,
+    onExpand: () -> Unit,
     onLanguageChanged: (BibleLanguage) -> Unit,
     onInputChanged: (String) -> Unit,
     onSend: () -> Unit,
@@ -97,13 +102,15 @@ fun ChatBubble(
                 .shadow(elevation = 24.dp, shape = Glass.panelShape, ambientColor = Color.Black.copy(alpha = 0.25f))
                 .clip(Glass.panelShape)
                 .background(Glass.panelBrush())
-                .border(width = 1.dp, brush = Glass.panelBorderBrush(), shape = Glass.panelShape),
+                .border(width = 1.dp, brush = Glass.panelBorderBrush(), shape = Glass.panelShape)
+                .let { if (bubble.isMinimized) it.clickable { onExpand() } else it },
             color = Color.Transparent,
             shape = Glass.panelShape,
         ) {
             Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
-                // Sticky header: verse label, language dropdown, close/start-over.
+                // Sticky header: sparkle + verse label, language dropdown, close/delete.
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("✨", modifier = Modifier.padding(end = 6.dp))
                     Text(
                         verseLabel,
                         style = MaterialTheme.typography.labelMedium,
@@ -125,6 +132,21 @@ fun ChatBubble(
                 // Single-word focus: bolded/larger, with pronunciation + a real definition,
                 // shown up top regardless of whether it came from the verse text or a reply.
                 bubble.wordInfo?.let { info -> WordInfoCard(info) }
+
+                if (bubble.isMinimized) {
+                    // Collapsed state (outside-tap): just the word/verse translation, no
+                    // conversation, suggestions, or input — tap anywhere to expand again.
+                    if (bubble.wordInfo == null) {
+                        Text(
+                            bubble.initialTranslation,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    return@Column
+                }
 
                 // Initial translation — still the precomputed/live one-shot result, unchanged (§7).
                 // Every word is tappable, same as chat replies (tap-word-autofill clarification).
@@ -156,40 +178,51 @@ fun ChatBubble(
                     }
                 }
 
-                if (bubble.suggestedChips.isNotEmpty()) {
-                    Row(Modifier.padding(top = 8.dp)) {
-                        bubble.suggestedChips.forEach { chip ->
-                            SuggestionChip(
-                                onClick = { onChipTapped(chip) },
-                                label = { Text(chip, style = MaterialTheme.typography.labelSmall) },
-                                modifier = Modifier.padding(end = 6.dp),
-                            )
-                        }
-                    }
-                }
-
                 if (bubble.atCap) {
                     Text(
-                        "This is a deep conversation! Starting fresh will help keep answers focused — tap 'Start Over' to continue.",
+                        "This is a deep conversation! Starting fresh will help keep answers focused — tap the trash icon to continue.",
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(top = 8.dp),
                     )
                 } else {
+                    // Suggestions used to sit in a chip row above the input; they now cycle
+                    // through the input's own placeholder (one at a time) so tapping the
+                    // arrow asks that question directly — once they've all been shown, the
+                    // placeholder settles on the plain "Ask a follow-up…" prompt.
+                    var suggestionIndex by remember(bubble.suggestedChips) { mutableIntStateOf(0) }
+                    LaunchedEffect(bubble.suggestedChips) {
+                        suggestionIndex = 0
+                        while (suggestionIndex < bubble.suggestedChips.size) {
+                            delay(2600)
+                            suggestionIndex++
+                        }
+                    }
+                    val currentSuggestion = bubble.suggestedChips.getOrNull(suggestionIndex)
+
                     Row(
                         Modifier.padding(top = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // Pill-shaped glass input with a slowly rotating,
-                        // Google-colored glow ring — the "Gemini is ready"
+                        // Pill-shaped glass input with a still, Google-colored
+                        // color-cycling glow ring — the "Gemini is ready"
                         // affordance, echoing the Get-a-Quote glass button.
                         TextField(
                             value = bubble.followUpInput,
                             onValueChange = onInputChanged,
-                            placeholder = { Text("Ask a follow-up…") },
+                            placeholder = { Text(currentSuggestion ?: "Ask a follow-up…") },
+                            leadingIcon = { Text("✨") },
+                            trailingIcon = if (currentSuggestion != null && bubble.followUpInput.isBlank()) {
+                                {
+                                    IconButton(onClick = { onChipTapped(currentSuggestion) }) {
+                                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Ask: $currentSuggestion")
+                                    }
+                                }
+                            } else null,
                             modifier = Modifier
                                 .weight(1f)
-                                .geminiGlowBorder(strokeWidth = 1.6.dp, cornerRadius = 24.dp)
-                                .background(Color.White.copy(alpha = 0.35f), Glass.pillShape),
+                                .clip(Glass.pillShape)
+                                .background(Color.White.copy(alpha = 0.6f), Glass.pillShape)
+                                .geminiGlowBorder(strokeWidth = 1.6.dp, cornerRadius = 999.dp),
                             singleLine = true,
                             enabled = !bubble.isSendingFollowUp,
                             shape = Glass.pillShape,

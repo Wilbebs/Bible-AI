@@ -70,6 +70,13 @@ data class ChatBubbleState(
     val originalLanguageIndex: Int = 0,
     /** Populated whenever exactly one word is in focus, from either the verse text or the AI's reply. */
     val wordInfo: WordInfoState? = null,
+    /**
+     * Set when the user taps outside the panel — collapses it to just the word/verse
+     * translation plus the header controls, without discarding the conversation
+     * (unlike "Delete chat", which clears history). Tapping the collapsed panel again
+     * expands it back.
+     */
+    val isMinimized: Boolean = false,
 )
 
 data class VerseTranslationEntry(val language: BibleLanguage, val text: String?)
@@ -249,7 +256,7 @@ class ReaderViewModel(
         _uiState.value = _uiState.value.copy(chatBubble = null)
     }
 
-    /** "Start Over" — clears the conversation but keeps the bubble open on the same verse (addendum §6). */
+    /** "Delete chat" — clears the conversation but keeps the bubble open on the same verse (addendum §6). */
     fun onStartOver() {
         val bubble = _uiState.value.chatBubble ?: return
         _uiState.value = _uiState.value.copy(
@@ -266,6 +273,23 @@ class ReaderViewModel(
                 ),
             ),
         )
+    }
+
+    /**
+     * Tapping anywhere outside the panel collapses it to just the translation/header
+     * (visual only — conversation history is preserved, unlike [onStartOver]).
+     */
+    fun onBubbleOutsideTap() {
+        val bubble = _uiState.value.chatBubble ?: return
+        if (bubble.isMinimized) return
+        _uiState.value = _uiState.value.copy(chatBubble = bubble.copy(isMinimized = true))
+    }
+
+    /** Tapping the collapsed panel expands it back to the full conversation view. */
+    fun onExpandBubble() {
+        val bubble = _uiState.value.chatBubble ?: return
+        if (!bubble.isMinimized) return
+        _uiState.value = _uiState.value.copy(chatBubble = bubble.copy(isMinimized = false))
     }
 
     fun onFollowUpInputChanged(text: String) {

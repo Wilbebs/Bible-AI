@@ -12,17 +12,23 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -32,7 +38,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.logos.bibletranslate.data.BibleLanguage
@@ -71,25 +76,35 @@ fun ReaderScreen(
 
     Scaffold(
         topBar = {
-            Column {
-                TopAppBar(
-                    title = {
-                        TextButton(onClick = { showBookPicker = true }) {
-                            Text("${uiState.selectedBookName} ${uiState.selectedChapter}")
+            // A compact custom bar instead of Material3's TopAppBar, which enforces a
+            // ~64dp minimum height on its own — between that and the language row below,
+            // it was eating a large chunk of the screen before any verse text appeared.
+            Surface(tonalElevation = 2.dp) {
+                Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .windowInsetsPadding(WindowInsets.statusBars)
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(onClick = { showBookPicker = true }, modifier = Modifier.weight(1f)) {
+                            Text(
+                                "${uiState.selectedBookName} ${uiState.selectedChapter}",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
                         }
-                    },
-                    actions = {
                         TextButton(onClick = { showChapterPicker = true }) {
                             Text("Ch.")
                         }
-                    },
-                )
-                LanguagePairSelector(
-                    readingLanguage = uiState.language,
-                    targetLanguage = uiState.targetLanguage,
-                    onReadingSelected = viewModel::onLanguageSelected,
-                    onTargetSelected = viewModel::onTargetLanguageSelected,
-                )
+                    }
+                    LanguagePairSelector(
+                        readingLanguage = uiState.language,
+                        targetLanguage = uiState.targetLanguage,
+                        onReadingSelected = viewModel::onLanguageSelected,
+                        onTargetSelected = viewModel::onTargetLanguageSelected,
+                    )
+                }
             }
         },
     ) { padding ->
@@ -133,14 +148,15 @@ fun ReaderScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(Color.Black.copy(alpha = 0.18f))
+                            // No scrim/darkening here — the scripture behind the panel must stay
+                            // exactly as readable (and scrollable) as when the bubble is closed.
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null,
-                                // Tapping outside the panel collapses the conversation back to
-                                // the word's original translation rather than closing the panel
-                                // entirely — only the explicit "✕" fully dismisses it.
-                                onClick = viewModel::onStartOver,
+                                // Tapping outside the panel collapses it to just the translation
+                                // (conversation history kept) — only the explicit "✕" fully closes
+                                // it, and the trash icon is what clears the conversation.
+                                onClick = viewModel::onBubbleOutsideTap,
                             ),
                     ) {
                         ChatBubble(
@@ -149,6 +165,7 @@ fun ReaderScreen(
                             bubble = bubble,
                             onClose = viewModel::onCloseBubble,
                             onStartOver = viewModel::onStartOver,
+                            onExpand = viewModel::onExpandBubble,
                             onLanguageChanged = viewModel::onBubbleLanguageChanged,
                             onInputChanged = viewModel::onFollowUpInputChanged,
                             onSend = viewModel::onSendFollowUp,
@@ -159,7 +176,11 @@ fun ReaderScreen(
                                 .clickable(
                                     interactionSource = remember { MutableInteractionSource() },
                                     indication = null,
-                                    onClick = {},
+                                    // While expanded, taps inside the panel are just consumed here
+                                    // so they don't fall through to the outside-tap handler above.
+                                    // While minimized, tapping anywhere on the collapsed panel
+                                    // (not just its Surface) expands it back.
+                                    onClick = { if (bubble.isMinimized) viewModel.onExpandBubble() },
                                 ),
                         )
                     }

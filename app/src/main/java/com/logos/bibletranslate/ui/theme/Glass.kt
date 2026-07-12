@@ -44,12 +44,17 @@ object Glass {
     val panelShape = RoundedCornerShape(28.dp)
     val pillShape = RoundedCornerShape(50)
 
-    /** Soft frosted panel background: a translucent, faintly diagonal sheen over content. */
+    /**
+     * Frosted panel background: a mostly-opaque, faintly diagonal sheen over content.
+     * Deliberately much closer to solid than a true see-through pane of glass — with
+     * dense verse text sitting directly behind it, a lighter/more transparent fill
+     * made the panel's own text unreadable, so legibility wins over transparency here.
+     */
     fun panelBrush(): Brush = Brush.linearGradient(
         colors = listOf(
-            Color.White.copy(alpha = 0.55f),
-            Color.White.copy(alpha = 0.30f),
-            Color.White.copy(alpha = 0.42f),
+            Color.White.copy(alpha = 0.97f),
+            Color.White.copy(alpha = 0.90f),
+            Color.White.copy(alpha = 0.95f),
         ),
     )
 

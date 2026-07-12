@@ -68,10 +68,17 @@ tokens in `ui/theme/Glass.kt` for future screens to pick up:
   `ui/theme/Glass.kt`) instead of appearing all at once — word-by-word for
   tappable text (so tap targets stay intact), character-by-character for
   plain text.
-- **Bubble dismissal**: tapping outside the panel calls the same logic as
-  "Delete chat" collapse-to-original-translation (`onStartOver`) rather than
-  closing it — only the explicit "✕" fully dismisses the bubble
-  (`ReaderScreen.kt`).
+- **Bubble dismissal**: tapping outside the panel *minimizes* it to just the
+  word/verse translation and header controls (conversation history kept) —
+  a separate `isMinimized` state from "Delete chat" (`onStartOver`, which
+  clears history). Tapping the collapsed panel expands it again; only the
+  explicit "✕" fully closes it (`ReaderScreen.kt` / `ReaderViewModel.kt`).
+- **AI bling**: a "✨" sparkle marks the panel header and the follow-up
+  input's leading icon as Gemini-branded touches.
+- **Follow-up suggestions**: no longer a chip row above the input — they
+  cycle through the input's own placeholder one at a time (tap the trailing
+  arrow to ask that one), settling back on the plain "Ask a follow-up…"
+  placeholder once they've all been shown.
 
 This is the first pass — the reader's top bar and verse list still use
 default Material styling and are natural next candidates if the glass look
