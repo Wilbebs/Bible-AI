@@ -6,23 +6,38 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -35,9 +50,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.logos.bibletranslate.data.BibleLanguage
@@ -51,6 +69,8 @@ import com.logos.bibletranslate.data.VerseChatClient
 import com.logos.bibletranslate.data.VerseData
 import com.logos.bibletranslate.data.VerseTokenizer
 import com.logos.bibletranslate.data.WordTranslationRepository
+import com.logos.bibletranslate.ui.theme.Sparkle
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,8 +91,18 @@ fun ReaderScreen(
     )
     val uiState by viewModel.uiState.collectAsState()
 
-    var showBookPicker by remember { mutableStateOf(false) }
-    var showChapterPicker by remember { mutableStateOf(false) }
+    var showBookChapterPicker by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+
+    // A verse search's landing spot: scroll it into view, then let the pulse have the
+    // stage for a while before clearing itself (a new selection also clears it early).
+    LaunchedEffect(uiState.highlightedVerse, uiState.verses) {
+        val target = uiState.highlightedVerse ?: return@LaunchedEffect
+        val index = uiState.verses.indexOfFirst { it.verse == target }
+        if (index >= 0) listState.animateScrollToItem(index)
+        delay(6000)
+        viewModel.clearHighlightedVerse()
+    }
 
     Scaffold(
         topBar = {
@@ -85,18 +115,23 @@ fun ReaderScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .windowInsetsPadding(WindowInsets.statusBars)
-                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        TextButton(onClick = { showBookPicker = true }, modifier = Modifier.weight(1f)) {
+                        // Single fluid book→chapter entry point (replaces the separate "Ch."
+                        // button — chapter navigation now lives inside the same picker).
+                        TextButton(onClick = { showBookChapterPicker = true }) {
                             Text(
-                                "${uiState.selectedBookName} ${uiState.selectedChapter}",
+                                "${uiState.selectedBookName} ${uiState.selectedChapter} ▾",
                                 style = MaterialTheme.typography.titleMedium,
                             )
                         }
-                        TextButton(onClick = { showChapterPicker = true }) {
-                            Text("Ch.")
-                        }
+                        // Reserved center slot for a future app logo/mark.
+                        Spacer(Modifier.weight(1f))
+                        VerseSearchBar(
+                            books = uiState.books,
+                            onSubmit = viewModel::onVerseSearchSubmitted,
+                        )
                     }
                     LanguagePairSelector(
                         readingLanguage = uiState.language,
@@ -122,6 +157,7 @@ fun ReaderScreen(
                 VerseList(
                     uiState = uiState,
                     padding = padding,
+                    listState = listState,
                     onSelectionStart = viewModel::onSelectionStart,
                     onSelectionExtend = viewModel::onSelectionExtend,
                     onWordToggle = viewModel::onVerseWordTapped,
@@ -188,24 +224,14 @@ fun ReaderScreen(
             }
         }
 
-        if (showBookPicker) {
-            BookPickerDialog(
+        if (showBookChapterPicker) {
+            BookChapterPickerDialog(
                 books = uiState.books,
-                onDismiss = { showBookPicker = false },
-                onBookSelected = {
-                    viewModel.onBookSelected(it)
-                    showBookPicker = false
-                },
-            )
-        }
-
-        if (showChapterPicker) {
-            ChapterPickerDialog(
-                chapterCount = uiState.chapterCount,
-                onDismiss = { showChapterPicker = false },
-                onChapterSelected = {
-                    viewModel.onChapterSelected(it)
-                    showChapterPicker = false
+                getChapterCount = viewModel::chapterCountFor,
+                onDismiss = { showBookChapterPicker = false },
+                onNavigate = { bookId, chapter ->
+                    viewModel.onBookAndChapterSelected(bookId, chapter)
+                    showBookChapterPicker = false
                 },
             )
         }
@@ -220,6 +246,7 @@ fun ReaderScreen(
 private fun VerseList(
     uiState: ReaderUiState,
     padding: PaddingValues,
+    listState: LazyListState,
     onSelectionStart: (Int, Int) -> Unit,
     onSelectionExtend: (Int, Int) -> Unit,
     onWordToggle: (Int, Int) -> Unit,
@@ -227,6 +254,7 @@ private fun VerseList(
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
+        state = listState,
         modifier = modifier.fillMaxSize().padding(padding),
         // Extra breathing room on the left specifically — Android's edge-swipe-back
         // gesture zone sits right at the screen edge, and verse text starting flush
@@ -249,53 +277,159 @@ private fun VerseList(
                 onSelectionExtend = { wordIndex -> onSelectionExtend(verse.verse, wordIndex) },
                 onWordToggle = { wordIndex -> onWordToggle(verse.verse, wordIndex) },
                 onTranslateVerse = { onTranslateVerse(verse) },
+                isHighlighted = uiState.highlightedVerse == verse.verse,
             )
         }
     }
 }
 
+/**
+ * A single fluid picker: pick a book, then pick a chapter for it — all in one dialog instead
+ * of two separate ones, with a "Back" step between them. Chapter counts are fetched lazily
+ * per book (only the current book's count is already known client-side).
+ */
 @Composable
-private fun BookPickerDialog(
+private fun BookChapterPickerDialog(
     books: List<BookInfo>,
+    getChapterCount: suspend (Int) -> Int,
     onDismiss: () -> Unit,
-    onBookSelected: (BookInfo) -> Unit,
+    onNavigate: (bookId: Int, chapter: Int) -> Unit,
 ) {
+    var selectedBook by remember { mutableStateOf<BookInfo?>(null) }
+    var chapterCount by remember { mutableStateOf<Int?>(null) }
+
+    LaunchedEffect(selectedBook) {
+        val book = selectedBook
+        chapterCount = if (book != null) getChapterCount(book.bookId) else null
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-        title = { Text("Select book") },
+        dismissButton = {
+            val book = selectedBook
+            if (book != null) {
+                TextButton(onClick = { selectedBook = null }) { Text("Back") }
+            } else {
+                TextButton(onClick = onDismiss) { Text("Close") }
+            }
+        },
+        title = { Text(selectedBook?.let { "${it.bookName} — chapter" } ?: "Select book") },
         text = {
-            LazyColumn {
-                items(books, key = { it.bookId }) { book ->
-                    TextButton(onClick = { onBookSelected(book) }) {
-                        Text(book.bookName)
+            val book = selectedBook
+            val count = chapterCount
+            when {
+                book == null -> LazyColumn {
+                    items(books, key = { it.bookId }) { b ->
+                        TextButton(onClick = { selectedBook = b }, modifier = Modifier.fillMaxWidth()) {
+                            Text(b.bookName, modifier = Modifier.fillMaxWidth())
+                        }
                     }
                 }
+                count == null -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+                else -> ChapterGrid(count = count, onChapterSelected = { chapter -> onNavigate(book.bookId, chapter) })
             }
         },
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ChapterPickerDialog(
-    chapterCount: Int,
-    onDismiss: () -> Unit,
-    onChapterSelected: (Int) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-        title = { Text("Select chapter") },
-        text = {
-            LazyColumn {
-                items((1..chapterCount).toList()) { chapter ->
-                    TextButton(onClick = { onChapterSelected(chapter) }) {
-                        Text("Chapter $chapter")
-                    }
+private fun ChapterGrid(count: Int, onChapterSelected: (Int) -> Unit) {
+    Column(Modifier.verticalScroll(rememberScrollState())) {
+        FlowRow {
+            (1..count).forEach { chapter ->
+                Surface(
+                    onClick = { onChapterSelected(chapter) },
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.padding(4.dp),
+                ) {
+                    Text(
+                        "$chapter",
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                 }
             }
-        },
-    )
+        }
+    }
+}
+
+/**
+ * Exact verse search — "[Book] [chapter]:[verse]" — with book-name autosuggest while the
+ * book-name portion is being typed. Submitting (search IME action) navigates straight to
+ * that verse and hands off to the highlight/scroll pipeline in [ReaderScreen].
+ */
+@Composable
+private fun VerseSearchBar(
+    books: List<BookInfo>,
+    onSubmit: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var expanded by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+
+    Box(modifier) {
+        Surface(
+            shape = RoundedCornerShape(50),
+            color = MaterialTheme.colorScheme.primaryContainer,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("🔎", style = MaterialTheme.typography.labelSmall)
+                Spacer(Modifier.width(4.dp))
+                Box(Modifier.width(84.dp)) {
+                    if (query.isEmpty()) {
+                        Text(
+                            "Jn 3:16",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f),
+                        )
+                    }
+                    BasicTextField(
+                        value = query,
+                        onValueChange = { text ->
+                            query = text
+                            expanded = verseSearchBookSuggestions(text, books).isNotEmpty()
+                        },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.labelSmall.copy(color = MaterialTheme.colorScheme.onPrimaryContainer),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = {
+                            expanded = false
+                            onSubmit(query)
+                            focusManager.clearFocus()
+                        }),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+        val suggestions = verseSearchBookSuggestions(query, books)
+        DropdownMenu(expanded = expanded && suggestions.isNotEmpty(), onDismissRequest = { expanded = false }) {
+            suggestions.forEach { book ->
+                DropdownMenuItem(
+                    text = { Text(book.bookName) },
+                    onClick = {
+                        query = "${book.bookName} "
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** Book-name autosuggest only kicks in while the book-name portion is being typed (before any digit/colon). */
+private fun verseSearchBookSuggestions(query: String, books: List<BookInfo>): List<BookInfo> {
+    val trimmed = query.trim()
+    if (trimmed.isEmpty() || trimmed.any { it.isDigit() || it == ':' }) return emptyList()
+    return books.filter { it.bookName.startsWith(trimmed, ignoreCase = true) }.take(6)
 }

@@ -1,5 +1,11 @@
 package com.logos.bibletranslate.ui.reader
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -12,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -20,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.boundsInParent
@@ -39,7 +47,26 @@ fun VerseRow(
     onWordToggle: (Int) -> Unit,
     onTranslateVerse: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Set for a verse search's landing verse — drives the slow sky-blue/dark-blue pulse across every word. */
+    isHighlighted: Boolean = false,
 ) {
+    // A two-tone (sky-blue ↔ deep-blue) breathing pulse, applied uniformly to every word in
+    // the verse so the whole sentence pulses together, not just one word.
+    val highlightColor: Color? = if (isHighlighted) {
+        val transition = rememberInfiniteTransition(label = "verseHighlight")
+        val progress by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1600, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "verseHighlightProgress",
+        )
+        lerp(Color(0xFF4FC3F7).copy(alpha = 0.22f), Color(0xFF0B1F4B).copy(alpha = 0.5f), progress)
+    } else {
+        null
+    }
     val bounds = remember(verse.verseId) { mutableStateMapOf<Int, Rect>() }
     // Read fresh at the start of each gesture (not captured once when pointerInput's block
     // was created) so a bubble opened mid-session correctly flips later taps into toggle mode
@@ -87,11 +114,16 @@ fun VerseRow(
         ) {
             tokens.forEachIndexed { index, token ->
                 val isSelected = index in selectedIndices
+                val background = when {
+                    highlightColor != null -> highlightColor
+                    isSelected -> MaterialTheme.colorScheme.primaryContainer
+                    else -> Color.Transparent
+                }
                 Text(
                     text = token,
                     modifier = Modifier
                         .onGloballyPositioned { coords -> bounds[index] = coords.boundsInParent() }
-                        .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+                        .background(background)
                         .padding(horizontal = 2.dp),
                     style = MaterialTheme.typography.bodyLarge,
                 )

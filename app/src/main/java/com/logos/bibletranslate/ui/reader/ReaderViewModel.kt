@@ -103,6 +103,8 @@ data class ReaderUiState(
     val isLoading: Boolean = true,
     val chatBubble: ChatBubbleState? = null,
     val verseDialog: VerseDialogData? = null,
+    /** Set by an exact verse search — drives the scroll-to + slow pulsing highlight, and self-clears after a while. */
+    val highlightedVerse: Int? = null,
 )
 
 class ReaderViewModel(
@@ -147,18 +149,42 @@ class ReaderViewModel(
         }
     }
 
-    fun onBookSelected(book: BookInfo) {
+    /** Fluid one-dialog book→chapter navigation — works whether [bookId] is the current book or a different one. */
+    fun onBookAndChapterSelected(bookId: Int, chapter: Int) {
         val state = _uiState.value
+        val book = state.books.firstOrNull { it.bookId == bookId } ?: return
         viewModelScope.launch {
-            loadBooksAndChapter(state.language, bookId = book.bookId, chapter = 1, targetLanguage = state.targetLanguage)
+            loadChapter(state.language, book.bookId, book.bookName, state.books, chapter, state.targetLanguage)
         }
     }
 
-    fun onChapterSelected(chapter: Int) {
+    /** Read-only chapter-count lookup for a book that may not be the currently loaded one — powers the picker's chapter grid. */
+    suspend fun chapterCountFor(bookId: Int): Int =
+        repository.getChapterCount(_uiState.value.language, bookId).coerceAtLeast(1)
+
+    /**
+     * Exact verse search (e.g. "John 3:16") — resolves the book by exact or prefix match
+     * against the currently loaded language's book list, navigates there if needed, and marks
+     * the verse for the scroll-to + pulsing highlight treatment. Silently no-ops on a query
+     * that doesn't parse or doesn't match a known book, since this is a live-as-you-type search
+     * box, not a form with its own error state.
+     */
+    fun onVerseSearchSubmitted(query: String) {
         val state = _uiState.value
+        val (book, chapter, verseNumber) = parseVerseQuery(query, state.books) ?: return
         viewModelScope.launch {
-            loadChapter(state.language, state.selectedBookId, state.selectedBookName, state.books, chapter, state.targetLanguage)
+            if (book.bookId == state.selectedBookId && chapter == state.selectedChapter) {
+                _uiState.value = _uiState.value.copy(highlightedVerse = verseNumber)
+            } else {
+                loadChapter(state.language, book.bookId, book.bookName, state.books, chapter, state.targetLanguage, highlightedVerse = verseNumber)
+            }
         }
+    }
+
+    /** Self-clear for the search highlight — called by the UI after the pulse has had time to draw the eye. */
+    fun clearHighlightedVerse() {
+        if (_uiState.value.highlightedVerse == null) return
+        _uiState.value = _uiState.value.copy(highlightedVerse = null)
     }
 
     /** Tap-down or drag-start on a word (§5). */
@@ -572,6 +598,13 @@ class ReaderViewModel(
     }
 
     private fun updateSelection(verseNumber: Int, range: IntRange) {
+        // Starting a new word selection means the user has moved on from wherever a verse
+        // search last landed them — clear that highlight rather than leaving it pulsing
+        // somewhere off-screen. Cleared before capturing `state` so the copies below don't
+        // resurrect the stale value.
+        if (_uiState.value.highlightedVerse != null) {
+            _uiState.value = _uiState.value.copy(highlightedVerse = null)
+        }
         val state = _uiState.value
         val verse = state.verses.firstOrNull { it.verse == verseNumber } ?: return
         val tokens = VerseTokenizer.tokenize(verse.text)
@@ -774,6 +807,7 @@ class ReaderViewModel(
         books: List<BookInfo>,
         chapter: Int,
         targetLanguage: BibleLanguage,
+        highlightedVerse: Int? = null,
     ) {
         _uiState.value = _uiState.value.copy(isLoading = true, chatBubble = null)
         val chapterCount = repository.getChapterCount(language, bookId).coerceAtLeast(1)
@@ -791,6 +825,7 @@ class ReaderViewModel(
             verses = verses,
             wordTranslations = wordTranslations,
             isLoading = false,
+            highlightedVerse = highlightedVerse,
         )
     }
 
@@ -801,6 +836,23 @@ class ReaderViewModel(
         )
         _uiState.value = _uiState.value.copy(wordTranslations = wordTranslations)
     }
+}
+
+/**
+ * Parses an exact verse query in the "[Book] [chapter]:[verse]" shape (e.g. "John 3:16" or
+ * "Song of Solomon 2:1") against the given book list — exact name match first, falling back to
+ * a prefix match so a partially-typed book name picked from the autosuggest list still resolves.
+ */
+private fun parseVerseQuery(query: String, books: List<BookInfo>): Triple<BookInfo, Int, Int>? {
+    val match = Regex("""^\s*(.+?)\s+(\d+)\s*:\s*(\d+)\s*$""").find(query) ?: return null
+    val (bookPart, chapterStr, verseStr) = match.destructured
+    val chapter = chapterStr.toIntOrNull() ?: return null
+    val verseNumber = verseStr.toIntOrNull() ?: return null
+    val trimmedBookPart = bookPart.trim()
+    val book = books.firstOrNull { it.bookName.equals(trimmedBookPart, ignoreCase = true) }
+        ?: books.firstOrNull { it.bookName.startsWith(trimmedBookPart, ignoreCase = true) }
+        ?: return null
+    return Triple(book, chapter, verseNumber)
 }
 
 private fun List<String>.distinctFromNeighbors(): List<String> =

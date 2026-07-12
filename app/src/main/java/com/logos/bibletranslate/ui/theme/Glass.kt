@@ -6,6 +6,8 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -20,11 +22,14 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
  * iOS-26-style "liquid glass" design tokens. Kept minimal and dependency-free
@@ -32,13 +37,17 @@ import kotlinx.coroutines.delay
  * and safe to build without a device on hand to visually verify against.
  */
 object Glass {
-    /** Google's brand colors, used for the Gemini-style cycling glow accent. */
-    val brandColors = listOf(
-        Color(0xFF4285F4), // blue
-        Color(0xFFEA4335), // red
-        Color(0xFFFBBC05), // yellow
-        Color(0xFF34A853), // green
-        Color(0xFF4285F4), // repeat first color so the sweep loops seamlessly
+    /**
+     * "Heaven" palette for the follow-up input's glow ring: deep night blue → sky blue →
+     * golden hour yellow → sky blue → deep night blue. First and last stops match so the
+     * sweep gradient loops with no seam.
+     */
+    val heavenColors = listOf(
+        Color(0xFF0B1F4B), // deep night blue
+        Color(0xFF4FC3F7), // sky blue
+        Color(0xFFFFD54F), // golden heaven yellow
+        Color(0xFF4FC3F7), // sky blue
+        Color(0xFF0B1F4B), // deep night blue (closes the loop)
     )
 
     val panelShape = RoundedCornerShape(28.dp)
@@ -66,52 +75,107 @@ object Glass {
         ),
     )
 
-    /** Interpolates a solid color at [position] along [brandColors] (0f..brandColors.lastIndex), for a still ring that only shifts color. */
-    fun colorAtCyclePosition(position: Float): Color {
-        val clamped = position.coerceIn(0f, (brandColors.size - 1).toFloat())
-        val index = clamped.toInt().coerceAtMost(brandColors.size - 2)
-        val fraction = clamped - index
-        return lerp(brandColors[index], brandColors[index + 1], fraction)
-    }
 }
 
 /**
- * Draws a still (non-rotating) border around the content whose color slowly
- * cycles through Google's brand colors — the "Gemini is ready" cue used on
- * the follow-up input. The ring itself never moves or spins; only its color
- * shifts, like the Gemini/Bard loading indicator's palette without the motion.
+ * Draws a slow, "heavenly" loading-style pulse around the content: a sweep gradient through
+ * [Glass.heavenColors] that continuously rotates around the ring — so every color is visible
+ * at once, just with more influence at different points around the loop at any given moment —
+ * plus a soft bright "blare" flare that travels with it, and a gentle overall brightness
+ * breathing on top. Used as the "Gemini is ready" cue on the follow-up input.
  */
 @Composable
 fun Modifier.geminiGlowBorder(
-    strokeWidth: Dp = 2.dp,
+    strokeWidth: Dp = 2.2.dp,
     cornerRadius: Dp = 28.dp,
-    durationMillis: Int = 5000,
+    durationMillis: Int = 7000,
 ): Modifier {
     val transition = rememberInfiniteTransition(label = "geminiGlow")
-    val colorPosition by transition.animateFloat(
+    val rotationDegrees by transition.animateFloat(
         initialValue = 0f,
-        targetValue = (Glass.brandColors.size - 1).toFloat(),
+        targetValue = 360f,
         animationSpec = infiniteRepeatable(
             animation = tween(durationMillis, easing = LinearEasing),
             repeatMode = RepeatMode.Restart,
         ),
-        label = "colorPosition",
+        label = "rotation",
     )
-    val color = Glass.colorAtCyclePosition(colorPosition)
+    val pulseAlpha by transition.animateFloat(
+        initialValue = 0.6f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis / 2, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "pulseAlpha",
+    )
     return this
         .clip(RoundedCornerShape(cornerRadius))
         .drawWithContent {
             drawContent()
             val strokePx = strokeWidth.toPx()
             val inset = strokePx / 2f
-            drawRoundRect(
-                color = color,
-                topLeft = Offset(inset, inset),
-                size = Size(size.width - strokePx, size.height - strokePx),
-                cornerRadius = CornerRadius(cornerRadius.toPx()),
-                style = Stroke(width = strokePx),
+            val center = Offset(size.width / 2f, size.height / 2f)
+            val ringBrush = Brush.sweepGradient(colors = Glass.heavenColors, center = center)
+
+            rotate(degrees = rotationDegrees, pivot = center) {
+                drawRoundRect(
+                    brush = ringBrush,
+                    topLeft = Offset(inset, inset),
+                    size = Size(size.width - strokePx, size.height - strokePx),
+                    cornerRadius = CornerRadius(cornerRadius.toPx()),
+                    style = Stroke(width = strokePx),
+                    alpha = pulseAlpha,
+                )
+            }
+
+            // A small bright "blare" of light that travels around the ring with the sweep,
+            // like a glint catching the loop as it turns.
+            val angleRad = Math.toRadians(rotationDegrees.toDouble())
+            val rx = size.width / 2f - inset
+            val ry = size.height / 2f - inset
+            val flareCenter = Offset(
+                x = center.x + rx * cos(angleRad).toFloat(),
+                y = center.y + ry * sin(angleRad).toFloat(),
+            )
+            val flareRadius = strokePx * 3.2f
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color.White.copy(alpha = 0.85f * pulseAlpha), Color.White.copy(alpha = 0f)),
+                    center = flareCenter,
+                    radius = flareRadius,
+                ),
+                radius = flareRadius,
+                center = flareCenter,
             )
         }
+}
+
+/**
+ * A small procedural 4-point sparkle glyph, tinted sky-blue → deep-blue — used as the "AI"
+ * accent instead of the ✨ emoji, whose color can't be tinted since emoji glyphs render as
+ * fixed full-color images on Android.
+ */
+@Composable
+fun Sparkle(modifier: Modifier = Modifier, size: Dp = 14.dp) {
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val cx = w / 2f
+        val cy = h / 2f
+        val path = Path().apply {
+            moveTo(cx, 0f)
+            cubicTo(cx + w * 0.08f, cy - h * 0.08f, cx + w * 0.42f, cy - h * 0.08f, w, cy)
+            cubicTo(cx + w * 0.42f, cy + h * 0.08f, cx + w * 0.08f, cy + h * 0.08f, cx, h)
+            cubicTo(cx - w * 0.08f, cy + h * 0.08f, cx - w * 0.42f, cy + h * 0.08f, 0f, cy)
+            cubicTo(cx - w * 0.42f, cy - h * 0.08f, cx - w * 0.08f, cy - h * 0.08f, cx, 0f)
+            close()
+        }
+        drawPath(
+            path = path,
+            brush = Brush.linearGradient(listOf(Color(0xFF4FC3F7), Color(0xFF0B1F4B))),
+        )
+    }
 }
 
 /**

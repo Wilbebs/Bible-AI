@@ -53,9 +53,18 @@ import com.logos.bibletranslate.data.ChatMessage
 import com.logos.bibletranslate.data.ChatRole
 import com.logos.bibletranslate.data.VerseTokenizer
 import com.logos.bibletranslate.ui.theme.Glass
+import com.logos.bibletranslate.ui.theme.Sparkle
 import com.logos.bibletranslate.ui.theme.geminiGlowBorder
 import com.logos.bibletranslate.ui.theme.rememberTypewriterProgress
 import kotlinx.coroutines.delay
+
+/** Endless fallback cycle once a turn's own suggestions have all been shown once. */
+private val FALLBACK_FOLLOWUP_SUGGESTIONS = listOf(
+    "Translate to Hebrew",
+    "Translate to Greek",
+    "Translate to Aramaic",
+    "Translate to Latin",
+)
 
 /**
  * The tap/verse-translate popup as a scoped mini-chat (chat-feature-addendum).
@@ -110,7 +119,7 @@ fun ChatBubble(
             Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
                 // Sticky header: sparkle + verse label, language dropdown, close/delete.
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("✨", modifier = Modifier.padding(end = 6.dp))
+                    Sparkle(size = 14.dp, modifier = Modifier.padding(end = 6.dp))
                     Text(
                         verseLabel,
                         style = MaterialTheme.typography.labelMedium,
@@ -186,31 +195,44 @@ fun ChatBubble(
                     )
                 } else {
                     // Suggestions used to sit in a chip row above the input; they now cycle
-                    // through the input's own placeholder (one at a time) so tapping the
-                    // arrow asks that question directly — once they've all been shown, the
-                    // placeholder settles on the plain "Ask a follow-up…" prompt.
+                    // through the input's own placeholder instead, one at a time, with a
+                    // typed-up reveal — this turn's own suggestions first (tapping the arrow
+                    // asks that one directly), then looping endlessly through a fallback set
+                    // of "Translate to X" prompts once the turn's own list is exhausted.
+                    val suggestionCycle = remember(bubble.suggestedChips) {
+                        bubble.suggestedChips + FALLBACK_FOLLOWUP_SUGGESTIONS
+                    }
                     var suggestionIndex by remember(bubble.suggestedChips) { mutableIntStateOf(0) }
-                    LaunchedEffect(bubble.suggestedChips) {
+                    LaunchedEffect(suggestionCycle) {
                         suggestionIndex = 0
-                        while (suggestionIndex < bubble.suggestedChips.size) {
-                            delay(2600)
-                            suggestionIndex++
+                        while (true) {
+                            delay(2800)
+                            suggestionIndex = (suggestionIndex + 1) % suggestionCycle.size
                         }
                     }
-                    val currentSuggestion = bubble.suggestedChips.getOrNull(suggestionIndex)
+                    val currentSuggestion = suggestionCycle.getOrNull(suggestionIndex)
+                    val typedSuggestion = currentSuggestion?.let { text ->
+                        val visibleChars = rememberTypewriterProgress(
+                            text = text,
+                            totalUnits = text.length,
+                            unitsPerTick = 1,
+                            tickMillis = 40,
+                        )
+                        text.take(visibleChars)
+                    }
 
                     Row(
                         Modifier.padding(top = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // Pill-shaped glass input with a still, Google-colored
-                        // color-cycling glow ring — the "Gemini is ready"
-                        // affordance, echoing the Get-a-Quote glass button.
+                        // Pill-shaped glass input with a slow, "heavenly" loading-style pulse
+                        // (dark blue → sky blue → golden → sky blue → dark blue) sweeping
+                        // around the ring — the "Gemini is ready" affordance.
                         TextField(
                             value = bubble.followUpInput,
                             onValueChange = onInputChanged,
-                            placeholder = { Text(currentSuggestion ?: "Ask a follow-up…") },
-                            leadingIcon = { Text("✨") },
+                            placeholder = { Text(typedSuggestion ?: "Ask a follow-up…") },
+                            leadingIcon = { Sparkle(size = 14.dp) },
                             trailingIcon = if (currentSuggestion != null && bubble.followUpInput.isBlank()) {
                                 {
                                     IconButton(onClick = { onChipTapped(currentSuggestion) }) {
@@ -222,7 +244,7 @@ fun ChatBubble(
                                 .weight(1f)
                                 .clip(Glass.pillShape)
                                 .background(Color.White.copy(alpha = 0.6f), Glass.pillShape)
-                                .geminiGlowBorder(strokeWidth = 1.6.dp, cornerRadius = 999.dp),
+                                .geminiGlowBorder(strokeWidth = 2.2.dp, cornerRadius = 999.dp),
                             singleLine = true,
                             enabled = !bubble.isSendingFollowUp,
                             shape = Glass.pillShape,
