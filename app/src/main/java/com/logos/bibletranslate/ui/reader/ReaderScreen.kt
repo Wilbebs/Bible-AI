@@ -1,6 +1,7 @@
 package com.logos.bibletranslate.ui.reader
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -33,6 +34,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -187,20 +189,19 @@ fun ReaderScreen(
             // keeps scrolling directly behind it — the buttons/dropdowns inside keep their own
             // solid fills so they stay legible regardless.
             //
-            // Starts as a full-width rectangle (square top corners, rounded bottom) flush with
-            // the top of the screen. Past the scroll threshold above, it morphs into a small
-            // floating pill sized to just fit its buttons: animateContentSize() smoothly
-            // interpolates the width/height change (fillMaxWidth -> wrapContentWidth), while the
-            // corner radii and outer margin animate in lockstep via animateDpAsState so the shape
-            // and the "floating" gap appear together rather than snapping.
-            val topCornerRadius by animateDpAsState(if (isNavBarCollapsed) 999.dp else 0.dp, label = "navBarTopCorner")
-            val bottomCornerRadius by animateDpAsState(if (isNavBarCollapsed) 999.dp else 20.dp, label = "navBarBottomCorner")
-            val outerHorizontalMargin by animateDpAsState(if (isNavBarCollapsed) 16.dp else 0.dp, label = "navBarMargin")
-            val outerTopMargin by animateDpAsState(if (isNavBarCollapsed) 8.dp else 0.dp, label = "navBarTopMargin")
-            val navBarShape = RoundedCornerShape(
-                topStart = topCornerRadius, topEnd = topCornerRadius,
-                bottomStart = bottomCornerRadius, bottomEnd = bottomCornerRadius,
-            )
+            // Starts as a full-width rectangle (square corners) flush with the top of the
+            // screen — a "glass-nav" bar per the web reference. Past the scroll threshold
+            // above, it morphs into a small floating pill sized to just fit its buttons:
+            // corner radius, outer margin, and inner padding all animate together over 500ms
+            // ease-in-out (matching the web spec's `transition-all duration-500 ease-in-out`),
+            // while animateContentSize() smoothly interpolates the width/height change
+            // (fillMaxWidth -> wrapContentWidth) in lockstep.
+            val navBarTransitionSpec = tween<Dp>(durationMillis = 500, easing = FastOutSlowInEasing)
+            val cornerRadius by animateDpAsState(if (isNavBarCollapsed) 999.dp else 0.dp, navBarTransitionSpec, label = "navBarCorner")
+            val outerMargin by animateDpAsState(if (isNavBarCollapsed) 12.dp else 0.dp, navBarTransitionSpec, label = "navBarMargin")
+            val rowHorizontalPadding by animateDpAsState(if (isNavBarCollapsed) 12.dp else 16.dp, navBarTransitionSpec, label = "navBarPaddingH")
+            val rowVerticalPadding by animateDpAsState(if (isNavBarCollapsed) 8.dp else 12.dp, navBarTransitionSpec, label = "navBarPaddingV")
+            val navBarShape = RoundedCornerShape(cornerRadius)
 
             Box(
                 modifier = Modifier.fillMaxWidth(),
@@ -208,9 +209,9 @@ fun ReaderScreen(
             ) {
                 Box(
                     modifier = Modifier
-                        .padding(horizontal = outerHorizontalMargin, vertical = outerTopMargin)
+                        .padding(horizontal = outerMargin, vertical = outerMargin)
                         .then(if (isNavBarCollapsed) Modifier.wrapContentWidth() else Modifier.fillMaxWidth())
-                        .animateContentSize()
+                        .animateContentSize(animationSpec = tween(durationMillis = 500, easing = FastOutSlowInEasing))
                         .shadow(elevation = 6.dp, shape = navBarShape)
                         .clip(navBarShape)
                         .background(Glass.navBarBrush())
@@ -223,7 +224,7 @@ fun ReaderScreen(
                         Row(
                             modifier = Modifier
                                 .windowInsetsPadding(WindowInsets.statusBars)
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                .padding(horizontal = rowHorizontalPadding, vertical = rowVerticalPadding),
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {

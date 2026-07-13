@@ -1,0 +1,32 @@
+Navbar pill/rectangle transition spec (from my web project — replicate in the mobile app):
+
+The navbar starts as a full-width rectangle flush to the top of the screen. Once the user scrolls down more than ~50px, it animates into a floating rounded "pill": it shrinks away from the edges, gets a margin/inset on all sides, fully rounded corners, smaller padding and a smaller logo. Scrolling back to the top reverses it. The animation is a smooth 500ms ease-in-out on all properties (position, corner radius, padding, size). The bar itself is a frosted-glass panel: ~85% opaque near-white background with a 20px background blur and a subtle 1px translucent border.
+
+Web reference implementation (React + Tailwind):
+
+const [isScrolled, setIsScrolled] = useState(false);
+useEffect(() => {
+  const handleScroll = () => setIsScrolled(window.scrollY > 50);
+  window.addEventListener('scroll', handleScroll);
+  return () => window.removeEventListener('scroll', handleScroll);
+}, []);
+// Mobile-width navbar
+<nav
+  className={`fixed left-0 right-0 z-50 glass-nav transition-all duration-500 ease-in-out ${
+    isScrolled
+      ? 'top-3 rounded-full mx-3 px-3 py-2'   // PILL: floating, inset 12px, fully rounded, tighter padding
+      : 'top-0 rounded-none px-4 py-3'        // RECTANGLE: flush to top, square corners, full width
+  }`}
+>
+  {/* logo also shrinks: h-9 normally, h-6 when scrolled */}
+</nav>
+
+Glass styling (CSS):
+
+.glass-nav {
+  backdrop-filter: blur(20px);
+  background: hsla(210, 40%, 98%, 0.85);
+  border: 1px solid hsla(210, 40%, 88%, 0.3);
+}
+
+For the mobile app, map it like this: track the scroll offset of the main scroll view (threshold ~50), and animate between the two states — border radius 0 → fully rounded (~999), horizontal/top margin 0 → 12, padding 16/12 → 12/8, logo height 36 → 24 — over 500ms with an ease-in-out curve. In React Native use Reanimated with interpolate on the scroll offset (or withTiming on the threshold flag) and a BlurView (expo-blur, intensity ≈ 20) with rgba(247,250,252,0.85) background and a 1px rgba(226,232,240,0.3) border for the frosted-glass look. In SwiftUI, the equivalent is .ultraThinMaterial with an animated corner radius and padding.
