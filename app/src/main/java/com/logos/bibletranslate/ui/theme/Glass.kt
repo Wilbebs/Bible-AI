@@ -88,12 +88,7 @@ object Glass {
      * behind it, but solid enough that the bar itself is unmistakably one continuous panel.
      */
     fun navBarBrush(): Brush = Brush.linearGradient(
-        colors = listOf(Color.White.copy(alpha = 0.78f), Color.White.copy(alpha = 0.78f)),
-    )
-
-    /** A uniform, subtle edge around the frosted nav bar card — no diagonal fade, for the same reason as [navBarBrush]. */
-    fun navBarBorderBrush(): Brush = Brush.linearGradient(
-        colors = listOf(Color.White.copy(alpha = 0.4f), Color.White.copy(alpha = 0.4f)),
+        colors = listOf(Color.White.copy(alpha = 0.6f), Color.White.copy(alpha = 0.6f)),
     )
 }
 

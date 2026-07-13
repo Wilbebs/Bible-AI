@@ -1,12 +1,16 @@
 package com.logos.bibletranslate.ui.reader
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -30,6 +34,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -42,6 +47,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -61,19 +67,24 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
 import com.logos.bibletranslate.data.BibleLanguage
 import com.logos.bibletranslate.data.BibleRepository
 import com.logos.bibletranslate.data.BookInfo
@@ -188,16 +199,21 @@ fun ReaderScreen(
             // a fixed shape for now — the scroll-triggered collapse into a floating pill
             // (corner radius/margin/padding animating together over 500ms ease-in-out) is
             // commented out below rather than deleted, in case it's wanted again later.
-            val cornerRadius = 0.dp
             val outerMargin = 0.dp
             val rowHorizontalPadding = 16.dp
             val rowVerticalPadding = 12.dp
-            // val navBarTransitionSpec = tween<Dp>(durationMillis = 500, easing = FastOutSlowInEasing)
-            // val cornerRadius by animateDpAsState(if (isNavBarCollapsed) 28.dp else 0.dp, navBarTransitionSpec, label = "navBarCorner")
-            // val outerMargin by animateDpAsState(if (isNavBarCollapsed) 12.dp else 0.dp, navBarTransitionSpec, label = "navBarMargin")
-            // val rowHorizontalPadding by animateDpAsState(if (isNavBarCollapsed) 12.dp else 16.dp, navBarTransitionSpec, label = "navBarPaddingH")
-            // val rowVerticalPadding by animateDpAsState(if (isNavBarCollapsed) 8.dp else 12.dp, navBarTransitionSpec, label = "navBarPaddingV")
-            val navBarShape = RoundedCornerShape(cornerRadius)
+            // Square across the top (flush with the very top of the screen) but rounded off
+            // along the bottom edge — a bit more than the original bottom-rounded pass — so
+            // the bar reads as a soft-edged panel rather than a hard-edged slab.
+            val navBarShape = RoundedCornerShape(topStart = 0.dp, topEnd = 0.dp, bottomStart = 26.dp, bottomEnd = 26.dp)
+
+            // Drag-down handle: pulling the little chevron down reveals a settings drawer
+            // beneath the main nav row, up to maxPanelHeight; releasing snaps it fully open
+            // or fully closed depending on which side of the halfway point it's on.
+            val coroutineScope = rememberCoroutineScope()
+            val density = LocalDensity.current
+            val maxPanelHeight = 140.dp
+            val panelHeight = remember { Animatable(0.dp, Dp.VectorConverter) }
 
             Box(
                 modifier = Modifier.fillMaxWidth(),
@@ -209,9 +225,8 @@ fun ReaderScreen(
                         .padding(horizontal = outerMargin, vertical = outerMargin)
                         .shadow(elevation = 6.dp, shape = navBarShape)
                         .clip(navBarShape)
-                        .background(Glass.navBarBrush())
-                        .border(BorderStroke(0.8.dp, Glass.navBarBorderBrush()), navBarShape),
-                    contentAlignment = Alignment.Center,
+                        .background(Glass.navBarBrush()),
+                    contentAlignment = Alignment.TopCenter,
                 ) {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         // Search-bar/nav-pill row height — the controls are vertically balanced
@@ -259,6 +274,63 @@ fun ReaderScreen(
                                 books = uiState.books,
                                 onSubmit = viewModel::onVerseSearchSubmitted,
                                 modifier = Modifier.height(navRowHeight),
+                            )
+                        }
+
+                        // Settings drawer revealed by dragging the chevron below. Height-driven
+                        // rather than AnimatedVisibility so it tracks the drag 1:1 while the
+                        // finger is down, and only springs on release.
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(panelHeight.value)
+                                .clip(RoundedCornerShape(bottomStart = 26.dp, bottomEnd = 26.dp)),
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 20.dp, vertical = 12.dp)
+                                    .alpha((panelHeight.value / maxPanelHeight).coerceIn(0f, 1f)),
+                            ) {
+                                Text(
+                                    "More settings coming soon",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+
+                        // Drag handle: a small chevron centered under the bar. Dragging it down
+                        // grows the settings drawer above 1:1 with the finger; letting go snaps
+                        // to fully open or fully closed depending on which side of the halfway
+                        // point the drawer was left on.
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.KeyboardArrowDown,
+                                contentDescription = "Drag for more settings",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .padding(bottom = 4.dp)
+                                    .size(20.dp)
+                                    .pointerInput(Unit) {
+                                        detectVerticalDragGestures(
+                                            onVerticalDrag = { change, dragAmount ->
+                                                change.consume()
+                                                val deltaDp = with(density) { dragAmount.toDp() }
+                                                val newHeight = (panelHeight.value + deltaDp).coerceIn(0.dp, maxPanelHeight)
+                                                coroutineScope.launch { panelHeight.snapTo(newHeight) }
+                                            },
+                                            onDragEnd = {
+                                                val target = if (panelHeight.value > maxPanelHeight / 2) maxPanelHeight else 0.dp
+                                                coroutineScope.launch {
+                                                    panelHeight.animateTo(target, spring(dampingRatio = 0.8f))
+                                                }
+                                            },
+                                        )
+                                    },
                             )
                         }
                     }
