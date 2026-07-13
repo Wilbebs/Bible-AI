@@ -1,8 +1,6 @@
 package com.logos.bibletranslate.ui.reader
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -32,7 +30,6 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -167,13 +164,12 @@ fun ReaderScreen(
     val displayedBookName = topVisibleVerse?.bookName ?: uiState.selectedBookName
     val displayedChapter = topVisibleVerse?.chapter ?: uiState.selectedChapter
 
-    // Collapses the navbar from an edge-to-edge rectangle into a content-hugging pill once the
-    // list has scrolled down more than a few dozen pixels — mirrors the Insureit navbar pattern.
-    // firstVisibleItemScrollOffset alone would reset to 0 every time a new item becomes the
-    // first visible one, so any further scroll (index > 0) also counts as "scrolled".
-    val isNavBarCollapsed by remember {
-        derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 50 }
-    }
+    // NOTE: the navbar previously collapsed from an edge-to-edge rectangle into a floating
+    // pill once scrolled (Insureit-style). Not needed for now — commented out rather than
+    // deleted so it's easy to bring back later.
+    // val isNavBarCollapsed by remember {
+    //     derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 50 }
+    // }
 
     Scaffold(
         topBar = {
@@ -188,19 +184,19 @@ fun ReaderScreen(
             // solid fills so they stay legible regardless.
             //
             // Starts as a full-width rectangle (square corners) flush with the top of the
-            // screen, exactly like the "Insureit" reference at scroll position 0. Past the
-            // scroll threshold above, it stays essentially full-width but floats: it gets an
-            // inset margin on all sides, fully rounded corners, and a shadow, matching the
-            // reference's scrolled state — the bar keeps the *same* row of content at (almost)
-            // the same width throughout, it just gains breathing room and rounds off rather
-            // than shrinking down to hug only its buttons. Corner radius, margin, and inner
-            // padding all animate together over 500ms ease-in-out (matching the web spec's
-            // `transition-all duration-500 ease-in-out`).
-            val navBarTransitionSpec = tween<Dp>(durationMillis = 500, easing = FastOutSlowInEasing)
-            val cornerRadius by animateDpAsState(if (isNavBarCollapsed) 28.dp else 0.dp, navBarTransitionSpec, label = "navBarCorner")
-            val outerMargin by animateDpAsState(if (isNavBarCollapsed) 12.dp else 0.dp, navBarTransitionSpec, label = "navBarMargin")
-            val rowHorizontalPadding by animateDpAsState(if (isNavBarCollapsed) 12.dp else 16.dp, navBarTransitionSpec, label = "navBarPaddingH")
-            val rowVerticalPadding by animateDpAsState(if (isNavBarCollapsed) 8.dp else 12.dp, navBarTransitionSpec, label = "navBarPaddingV")
+            // screen, exactly like the "Insureit" reference at scroll position 0. Retained as
+            // a fixed shape for now — the scroll-triggered collapse into a floating pill
+            // (corner radius/margin/padding animating together over 500ms ease-in-out) is
+            // commented out below rather than deleted, in case it's wanted again later.
+            val cornerRadius = 0.dp
+            val outerMargin = 0.dp
+            val rowHorizontalPadding = 16.dp
+            val rowVerticalPadding = 12.dp
+            // val navBarTransitionSpec = tween<Dp>(durationMillis = 500, easing = FastOutSlowInEasing)
+            // val cornerRadius by animateDpAsState(if (isNavBarCollapsed) 28.dp else 0.dp, navBarTransitionSpec, label = "navBarCorner")
+            // val outerMargin by animateDpAsState(if (isNavBarCollapsed) 12.dp else 0.dp, navBarTransitionSpec, label = "navBarMargin")
+            // val rowHorizontalPadding by animateDpAsState(if (isNavBarCollapsed) 12.dp else 16.dp, navBarTransitionSpec, label = "navBarPaddingH")
+            // val rowVerticalPadding by animateDpAsState(if (isNavBarCollapsed) 8.dp else 12.dp, navBarTransitionSpec, label = "navBarPaddingV")
             val navBarShape = RoundedCornerShape(cornerRadius)
 
             Box(
@@ -510,7 +506,7 @@ private fun VerseSearchBar(
     var expanded by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
 
-    Box(modifier) {
+    Box(modifier, contentAlignment = Alignment.CenterStart) {
         Surface(
             shape = RoundedCornerShape(50),
             color = MaterialTheme.colorScheme.primaryContainer,
