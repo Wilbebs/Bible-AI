@@ -80,23 +80,20 @@ object Glass {
     fun buttonBrush(): Brush = Brush.linearGradient(colors = listOf(skyBlue, deepBlue))
 
     /**
-     * Frosted-glass nav bar background — same diagonal-sheen family as [panelBrush] (the study
-     * bubble's panel), but a touch more see-through than it: the bar is a real card of its own
-     * now (buttons, logo and search all sitting inside one glass container), and scripture keeps
-     * scrolling directly behind it, so it reads best pitched just below the bubble's near-solid
-     * opacity rather than matching it exactly.
+     * Frosted-glass nav bar background — a *flat, uniform* fill rather than a diagonal
+     * gradient. A gradient brush spans the whole composable's bounds, and across a bar this
+     * wide but this short, the diagonal color shift reads as visible banding/seams (especially
+     * around the rounded pill corners) instead of a clean sheet of glass. A single uniform
+     * alpha avoids that "artifacting" — still see-through enough for scripture to read faintly
+     * behind it, but solid enough that the bar itself is unmistakably one continuous panel.
      */
     fun navBarBrush(): Brush = Brush.linearGradient(
-        colors = listOf(
-            Color.White.copy(alpha = 0.63f),
-            Color.White.copy(alpha = 0.57f),
-            Color.White.copy(alpha = 0.62f),
-        ),
+        colors = listOf(Color.White.copy(alpha = 0.92f), Color.White.copy(alpha = 0.92f)),
     )
 
-    /** A bright edge around the frosted nav bar card, echoing [panelBorderBrush]. */
+    /** A uniform, subtle edge around the frosted nav bar card — no diagonal fade, for the same reason as [navBarBrush]. */
     fun navBarBorderBrush(): Brush = Brush.linearGradient(
-        colors = listOf(Color.White.copy(alpha = 0.6f), Color.White.copy(alpha = 0.18f)),
+        colors = listOf(Color.White.copy(alpha = 0.55f), Color.White.copy(alpha = 0.55f)),
     )
 }
 

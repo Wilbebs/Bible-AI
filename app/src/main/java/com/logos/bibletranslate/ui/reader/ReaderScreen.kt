@@ -215,16 +215,18 @@ fun ReaderScreen(
                         .clip(navBarShape)
                         .background(Glass.navBarBrush())
                         .border(BorderStroke(0.8.dp, Glass.navBarBorderBrush()), navBarShape),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Column {
+                    Column(modifier = Modifier.fillMaxWidth()) {
                         // Search-bar/nav-pill row height — the controls are vertically balanced
                         // against this shared height.
                         val navRowHeight = 32.dp
                         Row(
                             modifier = Modifier
+                                .fillMaxWidth()
                                 .windowInsetsPadding(WindowInsets.statusBars)
                                 .padding(horizontal = rowHorizontalPadding, vertical = rowVerticalPadding),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             // Single fluid book→chapter entry point (replaces the separate "Ch."
