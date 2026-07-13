@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -40,6 +41,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.Image
 import androidx.compose.ui.res.painterResource
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -66,6 +68,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.logos.bibletranslate.data.BibleLanguage
@@ -116,6 +119,17 @@ fun ReaderScreen(
         viewModel.clearHighlightedVerse()
     }
 
+    // The study bubble panel floats over the bottom ~40-70% of the screen, so the verse it's
+    // attached to must never end up rendered underneath it. Scrolling that verse to the very
+    // top of the list whenever a *new* bubble opens (keyed only on which verse — not on every
+    // bubble state update, e.g. follow-up typing) guarantees it stays fully visible above the
+    // panel, regardless of where it happened to be on screen when tapped.
+    LaunchedEffect(uiState.chatBubble?.verseNumber) {
+        val verseNumber = uiState.chatBubble?.verseNumber ?: return@LaunchedEffect
+        val index = uiState.verses.indexOfFirst { it.verse == verseNumber }
+        if (index >= 0) listState.animateScrollToItem(index)
+    }
+
     Scaffold(
         topBar = {
             // A compact custom bar instead of Material3's TopAppBar, which enforces a
@@ -134,21 +148,42 @@ fun ReaderScreen(
                             .padding(horizontal = 8.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // Single fluid book→chapter entry point (replaces the separate "Ch."
-                        // button — chapter navigation now lives inside the same picker), balanced
-                        // against the search bar on the other side of the centered logo.
-                        TextButton(
-                            onClick = { showBookChapterPicker = true },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(navRowHeight)
-                                .clip(RoundedCornerShape(50))
-                                .border(BorderStroke(1.dp, Glass.buttonBrush()), RoundedCornerShape(50)),
+                        // Left cluster: book→chapter picker plus the reading-language pill,
+                        // sharing the same weight the search bar gets on the right so the
+                        // centered logo stays balanced. The old separate "Reading → Translate
+                        // to" row is gone — "translate to" now lives entirely in the study
+                        // bubble's own language dropdown, so only "reading language" needs a
+                        // home here, right next to the book/chapter control it's paired with.
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(
-                                "${uiState.selectedBookName} ${uiState.selectedChapter} ▾",
-                                style = MaterialTheme.typography.titleMedium,
-                                maxLines = 1,
+                            // Single fluid book→chapter entry point (replaces the separate "Ch."
+                            // button — chapter navigation now lives inside the same picker).
+                            // Shrunk to the nav row's height and no longer forced full-width, to
+                            // make room for the reading-language pill beside it.
+                            TextButton(
+                                onClick = { showBookChapterPicker = true },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(navRowHeight)
+                                    .clip(RoundedCornerShape(50))
+                                    .border(BorderStroke(1.dp, Glass.buttonBrush()), RoundedCornerShape(50)),
+                                contentPadding = PaddingValues(horizontal = 10.dp),
+                            ) {
+                                Text(
+                                    "${uiState.selectedBookName} ${uiState.selectedChapter} ▾",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Spacer(Modifier.width(6.dp))
+                            CompactReadingLanguagePicker(
+                                selected = uiState.language,
+                                options = BibleLanguage.entries,
+                                onSelected = viewModel::onLanguageSelected,
+                                modifier = Modifier.height(navRowHeight),
                             )
                         }
                         // Center logo — sized relative to the flanking controls (~1.6x their
@@ -168,12 +203,6 @@ fun ReaderScreen(
                             )
                         }
                     }
-                    LanguagePairSelector(
-                        readingLanguage = uiState.language,
-                        targetLanguage = uiState.targetLanguage,
-                        onReadingSelected = viewModel::onLanguageSelected,
-                        onTargetSelected = viewModel::onTargetLanguageSelected,
-                    )
                 }
             }
         },
@@ -455,6 +484,56 @@ private fun VerseSearchBar(
                     text = { Text(book.bookName) },
                     onClick = {
                         query = "${book.bookName} "
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Compact "reading language" pill for the top bar — shrunk to sit right next to the
+ * book/chapter picker at the same height, showing just the language code (no separate
+ * "Reading" label; there's no room for it at this size, and it's the only language control
+ * left in the top bar so context makes it clear). "Translate to" no longer lives up here —
+ * it's chosen per-conversation via the study bubble's own language dropdown instead.
+ */
+@Composable
+private fun CompactReadingLanguagePicker(
+    selected: BibleLanguage,
+    options: List<BibleLanguage>,
+    onSelected: (BibleLanguage) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier) {
+        Row(
+            modifier = Modifier
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(50))
+                .border(BorderStroke(1.dp, Glass.buttonBrush()), RoundedCornerShape(50))
+                .clickable { expanded = true }
+                .padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                selected.code.uppercase(),
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+            )
+            Icon(
+                imageVector = Icons.Filled.ArrowDropDown,
+                contentDescription = "Reading language",
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { language ->
+                DropdownMenuItem(
+                    text = { Text(language.displayName) },
+                    onClick = {
+                        onSelected(language)
                         expanded = false
                     },
                 )

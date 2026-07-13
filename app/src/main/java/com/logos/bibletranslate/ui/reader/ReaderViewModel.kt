@@ -145,14 +145,6 @@ class ReaderViewModel(
         }
     }
 
-    fun onTargetLanguageSelected(language: BibleLanguage) {
-        val state = _uiState.value
-        if (language == state.language) return
-        _uiState.value = state.copy(targetLanguage = language, chatBubble = null)
-        viewModelScope.launch {
-            reloadWordTranslations()
-        }
-    }
 
     /** Fluid one-dialog book→chapter navigation — works whether [bookId] is the current book or a different one. */
     fun onBookAndChapterSelected(bookId: Int, chapter: Int) {
@@ -370,9 +362,15 @@ class ReaderViewModel(
             return
         }
 
+        // This dropdown is now the only place "translate to" is chosen (the top bar's old
+        // separate control is gone), so persist the pick as the app-wide default target
+        // language too — future word taps elsewhere should keep using it, not silently reset.
+        // The chapter's cached word-level translations are keyed by target language, so they
+        // need a refetch too or a later plain word tap would show stale-language text.
         val apiKey = ApiKeys.geminiApiKey
         val myRequestId = ++liveCallRequestId
         _uiState.value = state.copy(
+            targetLanguage = language,
             chatBubble = bubble.copy(
                 bubbleTargetLanguage = language,
                 initialIsLoading = true,
@@ -380,6 +378,7 @@ class ReaderViewModel(
                 manualLanguageOverride = true,
             ),
         )
+        viewModelScope.launch { reloadWordTranslations() }
         if (apiKey == null) {
             _uiState.value = _uiState.value.copy(
                 chatBubble = _uiState.value.chatBubble?.copy(
