@@ -8,7 +8,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.background
@@ -33,7 +32,6 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -190,14 +188,16 @@ fun ReaderScreen(
             // solid fills so they stay legible regardless.
             //
             // Starts as a full-width rectangle (square corners) flush with the top of the
-            // screen — a "glass-nav" bar per the web reference. Past the scroll threshold
-            // above, it morphs into a small floating pill sized to just fit its buttons:
-            // corner radius, outer margin, and inner padding all animate together over 500ms
-            // ease-in-out (matching the web spec's `transition-all duration-500 ease-in-out`),
-            // while animateContentSize() smoothly interpolates the width/height change
-            // (fillMaxWidth -> wrapContentWidth) in lockstep.
+            // screen, exactly like the "Insureit" reference at scroll position 0. Past the
+            // scroll threshold above, it stays essentially full-width but floats: it gets an
+            // inset margin on all sides, fully rounded corners, and a shadow, matching the
+            // reference's scrolled state — the bar keeps the *same* row of content at (almost)
+            // the same width throughout, it just gains breathing room and rounds off rather
+            // than shrinking down to hug only its buttons. Corner radius, margin, and inner
+            // padding all animate together over 500ms ease-in-out (matching the web spec's
+            // `transition-all duration-500 ease-in-out`).
             val navBarTransitionSpec = tween<Dp>(durationMillis = 500, easing = FastOutSlowInEasing)
-            val cornerRadius by animateDpAsState(if (isNavBarCollapsed) 999.dp else 0.dp, navBarTransitionSpec, label = "navBarCorner")
+            val cornerRadius by animateDpAsState(if (isNavBarCollapsed) 28.dp else 0.dp, navBarTransitionSpec, label = "navBarCorner")
             val outerMargin by animateDpAsState(if (isNavBarCollapsed) 12.dp else 0.dp, navBarTransitionSpec, label = "navBarMargin")
             val rowHorizontalPadding by animateDpAsState(if (isNavBarCollapsed) 12.dp else 16.dp, navBarTransitionSpec, label = "navBarPaddingH")
             val rowVerticalPadding by animateDpAsState(if (isNavBarCollapsed) 8.dp else 12.dp, navBarTransitionSpec, label = "navBarPaddingV")
@@ -209,9 +209,8 @@ fun ReaderScreen(
             ) {
                 Box(
                     modifier = Modifier
+                        .fillMaxWidth()
                         .padding(horizontal = outerMargin, vertical = outerMargin)
-                        .then(if (isNavBarCollapsed) Modifier.wrapContentWidth() else Modifier.fillMaxWidth())
-                        .animateContentSize(animationSpec = tween(durationMillis = 500, easing = FastOutSlowInEasing))
                         .shadow(elevation = 6.dp, shape = navBarShape)
                         .clip(navBarShape)
                         .background(Glass.navBarBrush())
