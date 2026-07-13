@@ -49,6 +49,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -212,7 +213,9 @@ fun ReaderScreen(
             // or fully closed depending on which side of the halfway point it's on.
             val coroutineScope = rememberCoroutineScope()
             val density = LocalDensity.current
-            val maxPanelHeight = 140.dp
+            // Just enough to reveal a small settings icon — not a full drawer. More settings
+            // can be configured/added here later.
+            val maxPanelHeight = 48.dp
             val panelHeight = remember { Animatable(0.dp, Dp.VectorConverter) }
 
             Box(
@@ -277,27 +280,25 @@ fun ReaderScreen(
                             )
                         }
 
-                        // Settings drawer revealed by dragging the chevron below. Height-driven
+                        // Settings reveal, driven by dragging the chevron below. Height-driven
                         // rather than AnimatedVisibility so it tracks the drag 1:1 while the
-                        // finger is down, and only springs on release.
+                        // finger is down, and only springs on release. Deliberately small — just
+                        // enough room for a settings icon for now; actual settings to follow.
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(panelHeight.value)
                                 .clip(RoundedCornerShape(bottomStart = 26.dp, bottomEnd = 26.dp)),
+                            contentAlignment = Alignment.Center,
                         ) {
-                            Column(
+                            Icon(
+                                imageVector = Icons.Filled.Settings,
+                                contentDescription = "Settings",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 20.dp, vertical = 12.dp)
+                                    .size(22.dp)
                                     .alpha((panelHeight.value / maxPanelHeight).coerceIn(0f, 1f)),
-                            ) {
-                                Text(
-                                    "More settings coming soon",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
+                            )
                         }
 
                         // Drag handle: a small chevron centered under the bar. Dragging it down
