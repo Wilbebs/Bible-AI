@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -33,21 +34,50 @@ import kotlinx.coroutines.delay
  * (no third-party blur library) so the look is consistent, cheap to render,
  * and safe to build without a device on hand to visually verify against.
  */
-object Glass {
-    /** Sky blue — the dominant (~65%) tone in the two-tone glow/button palette. */
-    val skyBlue = Color(0xFF4FC3F7)
+/**
+ * A selectable accent color theme — shown as a "marble" swatch in the nav bar's settings
+ * reveal. [colors] is the gradient stop list used everywhere accent color appears (buttons,
+ * the follow-up input's glow ring, the reading-language pill) — 2 stops for a simple two-tone
+ * theme, 3 for a tri-tone one.
+ */
+enum class AccentTheme(val colors: List<Color>) {
+    SkyDeep(listOf(Color(0xFF4FC3F7), Color(0xFF0B1F4B))),
+    SkyDeepPurple(listOf(Color(0xFF4FC3F7), Color(0xFF0B1F4B), Color(0xFF6C3FC5))),
+    LightDarkPurple(listOf(Color(0xFFCBB2F0), Color(0xFF4A148C))),
+    LightDarkRed(listOf(Color(0xFFEF9A9A), Color(0xFFB71C1C))),
+}
 
-    /** Deep night blue — the minority (~35%) tone. */
-    val deepBlue = Color(0xFF0B1F4B)
+object Glass {
+    /**
+     * The app-wide accent theme, swapped from the nav bar's marble picker. Held as Compose
+     * state directly on the object (rather than threaded through every composable) so any
+     * composable that reads [skyBlue]/[deepBlue]/[buttonBrush] etc. automatically recomposes
+     * when the user picks a different theme, with no plumbing required at call sites.
+     */
+    var selectedAccentTheme by mutableStateOf(AccentTheme.SkyDeep)
+        private set
+
+    fun selectAccentTheme(theme: AccentTheme) {
+        selectedAccentTheme = theme
+    }
+
+    private val accentColors: List<Color> get() = selectedAccentTheme.colors
+
+    /** Sky blue (or the current theme's first/dominant tone) — the majority tone in the two-tone glow/button palette. */
+    val skyBlue: Color get() = accentColors.first()
+
+    /** Deep night blue (or the current theme's last/minority tone). */
+    val deepBlue: Color get() = accentColors.last()
 
     /**
-     * Two-tone glow palette for the follow-up input's pulse ring: sky blue holding the
-     * majority of the loop, dipping into deep night blue and smoothly back — no yellow, no
-     * discrete moving marker, just a slow color wash around a fixed ring.
+     * Glow palette for the follow-up input's pulse ring — always resolved to 3 stops so the
+     * ring animation stays consistent regardless of whether the selected theme has 2 or 3
+     * tones: two-tone themes repeat their first color at the end, matching the original
+     * "mostly-dominant-tone, dip into the minority tone" motion.
      */
-    val heavenColors = listOf(skyBlue, deepBlue, skyBlue)
+    val heavenColors: List<Color> get() = if (accentColors.size >= 3) accentColors else listOf(accentColors[0], accentColors[1], accentColors[0])
 
-    /** Stop positions paired with [heavenColors] — 0 → 0.65 → 1.0, giving sky blue the majority presence. */
+    /** Stop positions paired with [heavenColors] — 0 → 0.65 → 1.0, giving the dominant tone the majority presence. */
     val heavenStops = floatArrayOf(0f, 0.65f, 1f)
 
     val panelShape = RoundedCornerShape(28.dp)
@@ -76,8 +106,8 @@ object Glass {
         ),
     )
 
-    /** Sky-blue → deep-blue button fill — the "heaven" aesthetic applied to key tappable buttons (not text). */
-    fun buttonBrush(): Brush = Brush.linearGradient(colors = listOf(skyBlue, deepBlue))
+    /** Accent-gradient button fill — the "heaven" aesthetic applied to key tappable buttons (not text). */
+    fun buttonBrush(): Brush = Brush.linearGradient(colors = accentColors)
 
     /**
      * Frosted-glass nav bar background — a *flat, uniform* fill rather than a diagonal

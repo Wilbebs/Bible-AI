@@ -45,8 +45,10 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.Image
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -77,14 +79,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.logos.bibletranslate.R
+import com.logos.bibletranslate.ui.theme.AccentTheme
 import kotlinx.coroutines.launch
 import com.logos.bibletranslate.data.BibleLanguage
 import com.logos.bibletranslate.data.BibleRepository
@@ -213,9 +219,8 @@ fun ReaderScreen(
             // or fully closed depending on which side of the halfway point it's on.
             val coroutineScope = rememberCoroutineScope()
             val density = LocalDensity.current
-            // Just enough to reveal a small settings icon — not a full drawer. More settings
-            // can be configured/added here later.
-            val maxPanelHeight = 48.dp
+            // Just enough to reveal one row of controls — not a full drawer.
+            val maxPanelHeight = 56.dp
             val panelHeight = remember { Animatable(0.dp, Dp.VectorConverter) }
 
             Box(
@@ -282,8 +287,9 @@ fun ReaderScreen(
 
                         // Settings reveal, driven by dragging the chevron below. Height-driven
                         // rather than AnimatedVisibility so it tracks the drag 1:1 while the
-                        // finger is down, and only springs on release. Deliberately small — just
-                        // enough room for a settings icon for now; actual settings to follow.
+                        // finger is down, and only springs on release. Deliberately small — one
+                        // row: a settings icon, two accent-color marbles, the (unselectable)
+                        // logo, two more marbles, and a bookmark icon — no scrolling content.
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -291,14 +297,35 @@ fun ReaderScreen(
                                 .clip(RoundedCornerShape(bottomStart = 26.dp, bottomEnd = 26.dp)),
                             contentAlignment = Alignment.Center,
                         ) {
-                            Icon(
-                                imageVector = Icons.Filled.Settings,
-                                contentDescription = "Settings",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            Row(
                                 modifier = Modifier
-                                    .size(22.dp)
+                                    .padding(horizontal = 16.dp)
                                     .alpha((panelHeight.value / maxPanelHeight).coerceIn(0f, 1f)),
-                            )
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Settings,
+                                    contentDescription = "Settings",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                                AccentMarble(theme = AccentTheme.SkyDeep)
+                                AccentMarble(theme = AccentTheme.SkyDeepPurple)
+                                Image(
+                                    painter = painterResource(R.drawable.logo_jesus_group),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(26.dp),
+                                )
+                                AccentMarble(theme = AccentTheme.LightDarkPurple)
+                                AccentMarble(theme = AccentTheme.LightDarkRed)
+                                Icon(
+                                    imageVector = Icons.Filled.BookmarkBorder,
+                                    contentDescription = "Saved verses and words",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp).clickable { /* TODO: saved verses/words review */ },
+                                )
+                            }
                         }
 
                         // Drag handle: a small chevron centered under the bar. Dragging it down
@@ -562,6 +589,31 @@ private fun ChapterGrid(count: Int, onChapterSelected: (Int) -> Unit) {
             }
         }
     }
+}
+
+/**
+ * A small circular "marble" swatch showing an [AccentTheme]'s gradient — tapping it switches
+ * the app's accent color everywhere (buttons, glow ring, language pill) since [Glass] holds
+ * the selected theme as Compose state. The currently-selected theme gets a bright ring so it
+ * reads as "this one is active" among the options.
+ */
+@Composable
+private fun AccentMarble(theme: AccentTheme, size: Dp = 22.dp) {
+    val isSelected = Glass.selectedAccentTheme == theme
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(Brush.linearGradient(colors = theme.colors))
+            .then(
+                if (isSelected) {
+                    Modifier.border(BorderStroke(1.6.dp, MaterialTheme.colorScheme.onSurface), androidx.compose.foundation.shape.CircleShape)
+                } else {
+                    Modifier
+                },
+            )
+            .clickable { Glass.selectAccentTheme(theme) },
+    )
 }
 
 /**
