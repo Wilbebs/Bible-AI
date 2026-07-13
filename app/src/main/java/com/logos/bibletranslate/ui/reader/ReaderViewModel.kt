@@ -18,6 +18,7 @@ import com.logos.bibletranslate.data.VerseData
 import com.logos.bibletranslate.data.VerseTokenizer
 import com.logos.bibletranslate.data.WordTranslation
 import com.logos.bibletranslate.data.WordTranslationRepository
+import com.logos.bibletranslate.data.verseNumericId
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,7 +49,10 @@ data class WordInfoState(
 
 /** A tap/drag word selection, now a scoped mini-chat bubble (chat-feature-addendum). */
 data class ChatBubbleState(
-    val verseNumber: Int,
+    /** Globally unique (book+chapter+verse) id — a bare verse *number* isn't unique once the
+     * reader shows a continuous, multi-chapter scroll, since e.g. "verse 3" exists in every
+     * chapter. */
+    val verseId: Long,
     val wordRange: IntRange,
     val bubbleTargetLanguage: BibleLanguage,
     val initialTranslation: String,
@@ -100,13 +104,22 @@ data class ReaderUiState(
     val selectedBookName: String = "",
     val chapterCount: Int = 1,
     val selectedChapter: Int = 1,
+    /** A continuous, possibly multi-chapter run of verses — not just the "selected" chapter's own. */
     val verses: List<VerseData> = emptyList(),
-    val wordTranslations: Map<Int, List<WordTranslation>> = emptyMap(),
+    /** Keyed by [VerseData.numericVerseId], not a bare verse number, so chapters can merge safely. */
+    val wordTranslations: Map<Long, List<WordTranslation>> = emptyMap(),
     val isLoading: Boolean = true,
     val chatBubble: ChatBubbleState? = null,
     val verseDialog: VerseDialogData? = null,
     /** Set by an exact verse search — drives the scroll-to + slow pulsing highlight, and self-clears after a while. */
-    val highlightedVerse: Int? = null,
+    val highlightedVerseId: Long? = null,
+    /** Continuous-scroll pagination state — [verses] is lazily extended in both directions as the user nears either edge. */
+    val isLoadingMoreTop: Boolean = false,
+    val isLoadingMoreBottom: Boolean = false,
+    val hasMoreTop: Boolean = true,
+    val hasMoreBottom: Boolean = true,
+    /** Set right after prepending N verses at the top, so the UI can compensate the scroll offset once, then clear it. */
+    val pendingTopPrependCount: Int = 0,
 )
 
 class ReaderViewModel(
@@ -169,33 +182,34 @@ class ReaderViewModel(
     fun onVerseSearchSubmitted(query: String) {
         val state = _uiState.value
         val (book, chapter, verseNumber) = parseVerseQuery(query, state.books) ?: return
+        val targetId = verseNumericId(book.bookId, chapter, verseNumber)
         viewModelScope.launch {
-            if (book.bookId == state.selectedBookId && chapter == state.selectedChapter) {
-                _uiState.value = _uiState.value.copy(highlightedVerse = verseNumber)
+            if (state.verses.any { it.numericVerseId == targetId }) {
+                _uiState.value = _uiState.value.copy(highlightedVerseId = targetId)
             } else {
-                loadChapter(state.language, book.bookId, book.bookName, state.books, chapter, state.targetLanguage, highlightedVerse = verseNumber)
+                loadChapter(state.language, book.bookId, book.bookName, state.books, chapter, state.targetLanguage, highlightedVerseId = targetId)
             }
         }
     }
 
     /** Self-clear for the search highlight — called by the UI after the pulse has had time to draw the eye. */
     fun clearHighlightedVerse() {
-        if (_uiState.value.highlightedVerse == null) return
-        _uiState.value = _uiState.value.copy(highlightedVerse = null)
+        if (_uiState.value.highlightedVerseId == null) return
+        _uiState.value = _uiState.value.copy(highlightedVerseId = null)
     }
 
     /** Tap-down or drag-start on a word (§5). */
-    fun onSelectionStart(verseNumber: Int, wordIndex: Int) {
-        updateSelection(verseNumber, wordIndex..wordIndex)
+    fun onSelectionStart(verseId: Long, wordIndex: Int) {
+        updateSelection(verseId, wordIndex..wordIndex)
     }
 
     /** Drag extending the selection; live-updates the bubble (§5). */
-    fun onSelectionExtend(verseNumber: Int, wordIndex: Int) {
+    fun onSelectionExtend(verseId: Long, wordIndex: Int) {
         val current = _uiState.value.chatBubble ?: return
-        if (current.verseNumber != verseNumber) return
+        if (current.verseId != verseId) return
         val start = current.wordRange.first
         val newRange = if (wordIndex >= start) start..wordIndex else wordIndex..start
-        updateSelection(verseNumber, newRange)
+        updateSelection(verseId, newRange)
     }
 
     /**
@@ -204,11 +218,11 @@ class ReaderViewModel(
      * (tap-word-autofill-idea.md). Taps on a different verse fall through to onSelectionStart
      * and open a fresh bubble there instead.
      */
-    fun onVerseWordTapped(verseNumber: Int, wordIndex: Int) {
+    fun onVerseWordTapped(verseId: Long, wordIndex: Int) {
         val state = _uiState.value
         val bubble = state.chatBubble ?: return
-        if (bubble.verseNumber != verseNumber) return
-        val verse = state.verses.firstOrNull { it.verse == verseNumber } ?: return
+        if (bubble.verseId != verseId) return
+        val verse = state.verses.firstOrNull { it.numericVerseId == verseId } ?: return
         val tokens = VerseTokenizer.tokenize(verse.text)
         if (wordIndex !in tokens.indices) return
 
@@ -260,7 +274,7 @@ class ReaderViewModel(
             manualLanguageOverride = true,
         )
         if (newQueue.size == 1) {
-            val verse = state.verses.firstOrNull { it.verse == bubble.verseNumber }
+            val verse = state.verses.firstOrNull { it.numericVerseId == bubble.verseId }
             if (verse != null) {
                 // Same immediate-loading treatment as a verse-text tap (§3).
                 _uiState.value = state.copy(chatBubble = updatedBubble.copy(wordInfo = WordInfoState(newQueue.first(), isLoading = true)))
@@ -342,7 +356,7 @@ class ReaderViewModel(
         val state = _uiState.value
         val bubble = state.chatBubble ?: return
         if (language == bubble.bubbleTargetLanguage) return
-        val verse = state.verses.firstOrNull { it.verse == bubble.verseNumber } ?: return
+        val verse = state.verses.firstOrNull { it.numericVerseId == bubble.verseId } ?: return
 
         // Picking the reading language itself: no translation needed, just show the original
         // text and let follow-ups happen in that language (all 3 languages are now selectable
@@ -413,7 +427,7 @@ class ReaderViewModel(
     }
 
     private fun sendFollowUp(bubble: ChatBubbleState, state: ReaderUiState, rawQuestion: String, advanceOriginalLanguage: Boolean = false) {
-        val verse = state.verses.firstOrNull { it.verse == bubble.verseNumber } ?: return
+        val verse = state.verses.firstOrNull { it.numericVerseId == bubble.verseId } ?: return
         val question = capWords(rawQuestion, MAX_FOLLOWUP_WORDS)
         val historyBeforeThisTurn = bubble.messages
         val messagesWithQuestion = historyBeforeThisTurn + ChatMessage(ChatRole.USER, question)
@@ -601,19 +615,19 @@ class ReaderViewModel(
         return bubble.copy(wordInfo = null)
     }
 
-    private fun updateSelection(verseNumber: Int, range: IntRange) {
+    private fun updateSelection(verseId: Long, range: IntRange) {
         // Starting a new word selection means the user has moved on from wherever a verse
         // search last landed them — clear that highlight rather than leaving it pulsing
         // somewhere off-screen. Cleared before capturing `state` so the copies below don't
         // resurrect the stale value.
-        if (_uiState.value.highlightedVerse != null) {
-            _uiState.value = _uiState.value.copy(highlightedVerse = null)
+        if (_uiState.value.highlightedVerseId != null) {
+            _uiState.value = _uiState.value.copy(highlightedVerseId = null)
         }
         val state = _uiState.value
-        val verse = state.verses.firstOrNull { it.verse == verseNumber } ?: return
+        val verse = state.verses.firstOrNull { it.numericVerseId == verseId } ?: return
         val tokens = VerseTokenizer.tokenize(verse.text)
         val clamped = range.first.coerceIn(0, tokens.lastIndex)..range.last.coerceIn(0, tokens.lastIndex)
-        val wordsForVerse = state.wordTranslations[verseNumber].orEmpty().associateBy { it.wordIndex }
+        val wordsForVerse = state.wordTranslations[verseId].orEmpty().associateBy { it.wordIndex }
         val parts = clamped.map { wordsForVerse[it]?.translatedWord }
         val hasData = parts.all { it != null }
 
@@ -633,18 +647,21 @@ class ReaderViewModel(
         if (hasData) {
             val text = parts.filterNotNull().distinctFromNeighbors().joinToString(" ")
             _uiState.value = state.copy(
-                chatBubble = ChatBubbleState(verseNumber, clamped, state.targetLanguage, text, initialHasData = true, wordInfo = initialWordInfo, openSequence = openSeq),
+                chatBubble = ChatBubbleState(verseId, clamped, state.targetLanguage, text, initialHasData = true, wordInfo = initialWordInfo, openSequence = openSeq),
             )
             singleWord?.let { fetchWordInfoAsync(verse, it, state.language) }
             return
         }
 
-        if (state.selectedBookId == LEVITICUS_BOOK_ID) {
+        // These two books are the live-call experiments (no precomputed word data) — gated on
+        // *this verse's* own book, not whatever book was last explicitly navigated to, since a
+        // continuous scroll can carry the user into/out of either book without a fresh "load".
+        if (verse.bookId == LEVITICUS_BOOK_ID) {
             val apiKey = ApiKeys.geminiApiKey
             if (apiKey == null) {
                 _uiState.value = state.copy(
                     chatBubble = ChatBubbleState(
-                        verseNumber, clamped, state.targetLanguage,
+                        verseId, clamped, state.targetLanguage,
                         "No Gemini API key configured for this build.", initialHasData = false, wordInfo = initialWordInfo, openSequence = openSeq,
                     ),
                 )
@@ -654,7 +671,7 @@ class ReaderViewModel(
             val selectedText = clamped.joinToString(" ") { tokens[it] }
             _uiState.value = state.copy(
                 chatBubble = ChatBubbleState(
-                    verseNumber, clamped, state.targetLanguage, "Translating…", initialHasData = false, initialIsLoading = true, wordInfo = initialWordInfo, openSequence = openSeq,
+                    verseId, clamped, state.targetLanguage, "Translating…", initialHasData = false, initialIsLoading = true, wordInfo = initialWordInfo, openSequence = openSeq,
                 ),
             )
             singleWord?.let { fetchWordInfoAsync(verse, it, state.language) }
@@ -669,12 +686,12 @@ class ReaderViewModel(
             return
         }
 
-        if (state.selectedBookId == EXODUS_BOOK_ID) {
+        if (verse.bookId == EXODUS_BOOK_ID) {
             val apiKey = ApiKeys.translateApiKey
             if (apiKey == null) {
                 _uiState.value = state.copy(
                     chatBubble = ChatBubbleState(
-                        verseNumber, clamped, state.targetLanguage,
+                        verseId, clamped, state.targetLanguage,
                         "No Translation API key configured for this build.", initialHasData = false, wordInfo = initialWordInfo, openSequence = openSeq,
                     ),
                 )
@@ -684,7 +701,7 @@ class ReaderViewModel(
             val selectedWords = clamped.map { tokens[it] }
             _uiState.value = state.copy(
                 chatBubble = ChatBubbleState(
-                    verseNumber, clamped, state.targetLanguage, "Translating…", initialHasData = false, initialIsLoading = true, wordInfo = initialWordInfo, openSequence = openSeq,
+                    verseId, clamped, state.targetLanguage, "Translating…", initialHasData = false, initialIsLoading = true, wordInfo = initialWordInfo, openSequence = openSeq,
                 ),
             )
             singleWord?.let { fetchWordInfoAsync(verse, it, state.language) }
@@ -700,7 +717,7 @@ class ReaderViewModel(
         }
 
         _uiState.value = state.copy(
-            chatBubble = ChatBubbleState(verseNumber, clamped, state.targetLanguage, "No word-level translation yet", initialHasData = false, wordInfo = initialWordInfo, openSequence = openSeq),
+            chatBubble = ChatBubbleState(verseId, clamped, state.targetLanguage, "No word-level translation yet", initialHasData = false, wordInfo = initialWordInfo, openSequence = openSeq),
         )
         singleWord?.let { fetchWordInfoAsync(verse, it, state.language) }
     }
@@ -812,13 +829,16 @@ class ReaderViewModel(
         books: List<BookInfo>,
         chapter: Int,
         targetLanguage: BibleLanguage,
-        highlightedVerse: Int? = null,
+        highlightedVerseId: Long? = null,
     ) {
         _uiState.value = _uiState.value.copy(isLoading = true, chatBubble = null)
         val chapterCount = repository.getChapterCount(language, bookId).coerceAtLeast(1)
         val resolvedChapter = chapter.coerceIn(1, chapterCount)
         val verses = repository.getChapter(language, bookId, resolvedChapter)
         val wordTranslations = wordTranslationRepository.getChapterWordTranslations(language, targetLanguage, bookId, resolvedChapter)
+        // A fresh explicit load (jump/search/language switch) resets the continuous-scroll
+        // window back down to just this one chapter — ReaderUiState()'s field defaults already
+        // reopen both pagination directions and clear any in-flight paging state.
         _uiState.value = ReaderUiState(
             language = language,
             targetLanguage = targetLanguage,
@@ -830,8 +850,87 @@ class ReaderViewModel(
             verses = verses,
             wordTranslations = wordTranslations,
             isLoading = false,
-            highlightedVerse = highlightedVerse,
+            highlightedVerseId = highlightedVerseId,
         )
+    }
+
+    /** Resolves what comes immediately after (bookId, chapter) — next chapter, or chapter 1 of the next book. Null past Revelation. */
+    private suspend fun nextChapterRef(language: BibleLanguage, bookId: Int, chapter: Int, books: List<BookInfo>): Pair<Int, Int>? {
+        val chapterCount = repository.getChapterCount(language, bookId).coerceAtLeast(1)
+        if (chapter < chapterCount) return bookId to (chapter + 1)
+        val bookIndex = books.indexOfFirst { it.bookId == bookId }
+        val nextBook = books.getOrNull(bookIndex + 1) ?: return null
+        return nextBook.bookId to 1
+    }
+
+    /** Resolves what comes immediately before (bookId, chapter) — previous chapter, or the last chapter of the previous book. Null before Genesis 1. */
+    private suspend fun prevChapterRef(language: BibleLanguage, bookId: Int, chapter: Int, books: List<BookInfo>): Pair<Int, Int>? {
+        if (chapter > 1) return bookId to (chapter - 1)
+        val bookIndex = books.indexOfFirst { it.bookId == bookId }
+        val prevBook = books.getOrNull(bookIndex - 1) ?: return null
+        val lastChapter = repository.getChapterCount(language, prevBook.bookId).coerceAtLeast(1)
+        return prevBook.bookId to lastChapter
+    }
+
+    /**
+     * Called by the UI once the scroll position nears the bottom of what's loaded — appends the
+     * next chapter (crossing into the next book at a book's end) so scrolling reads as one
+     * continuous stream instead of stopping dead at a chapter boundary.
+     */
+    fun onNearBottomOfList() {
+        val state = _uiState.value
+        if (state.isLoadingMoreBottom || !state.hasMoreBottom) return
+        val last = state.verses.lastOrNull() ?: return
+        _uiState.value = state.copy(isLoadingMoreBottom = true)
+        viewModelScope.launch {
+            val next = nextChapterRef(state.language, last.bookId, last.chapter, state.books)
+            if (next == null) {
+                _uiState.value = _uiState.value.copy(isLoadingMoreBottom = false, hasMoreBottom = false)
+                return@launch
+            }
+            val (bookId, chapter) = next
+            val newVerses = repository.getChapter(state.language, bookId, chapter)
+            val newWordTranslations = wordTranslationRepository.getChapterWordTranslations(state.language, state.targetLanguage, bookId, chapter)
+            val current = _uiState.value
+            _uiState.value = current.copy(
+                verses = current.verses + newVerses,
+                wordTranslations = current.wordTranslations + newWordTranslations,
+                isLoadingMoreBottom = false,
+            )
+        }
+    }
+
+    /** Same idea as [onNearBottomOfList], but prepending the previous chapter as the user scrolls up. */
+    fun onNearTopOfList() {
+        val state = _uiState.value
+        if (state.isLoadingMoreTop || !state.hasMoreTop) return
+        val first = state.verses.firstOrNull() ?: return
+        _uiState.value = state.copy(isLoadingMoreTop = true)
+        viewModelScope.launch {
+            val prev = prevChapterRef(state.language, first.bookId, first.chapter, state.books)
+            if (prev == null) {
+                _uiState.value = _uiState.value.copy(isLoadingMoreTop = false, hasMoreTop = false)
+                return@launch
+            }
+            val (bookId, chapter) = prev
+            val newVerses = repository.getChapter(state.language, bookId, chapter)
+            val newWordTranslations = wordTranslationRepository.getChapterWordTranslations(state.language, state.targetLanguage, bookId, chapter)
+            val current = _uiState.value
+            _uiState.value = current.copy(
+                verses = newVerses + current.verses,
+                wordTranslations = current.wordTranslations + newWordTranslations,
+                isLoadingMoreTop = false,
+                // Tells the UI exactly how many items just landed above the viewport, so it can
+                // compensate the scroll offset by that many items and avoid a visible jump.
+                pendingTopPrependCount = newVerses.size,
+            )
+        }
+    }
+
+    /** Called by the UI right after it has compensated the scroll offset for a top-prepend. */
+    fun clearPendingTopPrepend() {
+        if (_uiState.value.pendingTopPrependCount == 0) return
+        _uiState.value = _uiState.value.copy(pendingTopPrependCount = 0)
     }
 
     private suspend fun reloadWordTranslations() {

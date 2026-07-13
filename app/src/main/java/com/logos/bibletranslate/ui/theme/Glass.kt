@@ -78,6 +78,25 @@ object Glass {
 
     /** Sky-blue → deep-blue button fill — the "heaven" aesthetic applied to key tappable buttons (not text). */
     fun buttonBrush(): Brush = Brush.linearGradient(colors = listOf(skyBlue, deepBlue))
+
+    /**
+     * Frosted-glass nav bar background — same diagonal-sheen family as [panelBrush], but far
+     * lower opacity, since the bar has no dense text of its own sitting directly against it
+     * (unlike the study panel). Opacity is deliberately kept on the buttons/dropdowns that sit
+     * on top of the bar instead, so those stay legible while the bar itself reads as glass.
+     */
+    fun navPanelBrush(): Brush = Brush.linearGradient(
+        colors = listOf(
+            Color.White.copy(alpha = 0.32f),
+            Color.White.copy(alpha = 0.16f),
+            Color.White.copy(alpha = 0.28f),
+        ),
+    )
+
+    /** A faint bright edge along the bottom of the frosted nav bar, echoing [panelBorderBrush] at lower opacity. */
+    fun navPanelBorderBrush(): Brush = Brush.linearGradient(
+        colors = listOf(Color.White.copy(alpha = 0.55f), Color.White.copy(alpha = 0.1f)),
+    )
 }
 
 /**

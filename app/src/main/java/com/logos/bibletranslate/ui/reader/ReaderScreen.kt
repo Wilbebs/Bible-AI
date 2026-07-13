@@ -57,15 +57,18 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -111,9 +114,9 @@ fun ReaderScreen(
 
     // A verse search's landing spot: scroll it into view, then let the pulse have the
     // stage for a while before clearing itself (a new selection also clears it early).
-    LaunchedEffect(uiState.highlightedVerse, uiState.verses) {
-        val target = uiState.highlightedVerse ?: return@LaunchedEffect
-        val index = uiState.verses.indexOfFirst { it.verse == target }
+    LaunchedEffect(uiState.highlightedVerseId, uiState.verses) {
+        val target = uiState.highlightedVerseId ?: return@LaunchedEffect
+        val index = uiState.verses.indexOfFirst { it.numericVerseId == target }
         if (index >= 0) listState.animateScrollToItem(index)
         delay(6000)
         viewModel.clearHighlightedVerse()
@@ -124,18 +127,59 @@ fun ReaderScreen(
     // top of the list whenever a *new* bubble opens (keyed only on which verse — not on every
     // bubble state update, e.g. follow-up typing) guarantees it stays fully visible above the
     // panel, regardless of where it happened to be on screen when tapped.
-    LaunchedEffect(uiState.chatBubble?.verseNumber) {
-        val verseNumber = uiState.chatBubble?.verseNumber ?: return@LaunchedEffect
-        val index = uiState.verses.indexOfFirst { it.verse == verseNumber }
+    LaunchedEffect(uiState.chatBubble?.verseId) {
+        val verseId = uiState.chatBubble?.verseId ?: return@LaunchedEffect
+        val index = uiState.verses.indexOfFirst { it.numericVerseId == verseId }
         if (index >= 0) listState.animateScrollToItem(index)
     }
+
+    // Continuous cross-chapter scroll (§ pagination): watched off the same listState the
+    // LazyColumn uses, so both loading-more-at-the-edge and the "which chapter is on screen
+    // right now" label below react to the same source of truth. Guarded internally by the
+    // ViewModel's isLoadingMore*/hasMore* flags, so firing on every scroll tick is harmless.
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            listState.firstVisibleItemIndex to listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index
+        }.collect { (firstIndex, lastIndex) ->
+            if (firstIndex <= 3) viewModel.onNearTopOfList()
+            if (lastIndex != null && lastIndex >= uiState.verses.size - 4) viewModel.onNearBottomOfList()
+        }
+    }
+
+    // Prepending chapters above the current scroll position would otherwise yank the visible
+    // content downward (LazyColumn keeps the same *index* on screen, which now points at a
+    // different item) — compensate once, right after a prepend lands, by scrolling forward
+    // exactly as many items as were just added, keeping the same verse pinned in place.
+    LaunchedEffect(uiState.pendingTopPrependCount) {
+        val prependedCount = uiState.pendingTopPrependCount
+        if (prependedCount > 0) {
+            listState.scrollToItem(listState.firstVisibleItemIndex + prependedCount, listState.firstVisibleItemScrollOffset)
+            viewModel.clearPendingTopPrepend()
+        }
+    }
+
+    // The book/chapter button reflects whatever chapter is actually scrolled into view, not
+    // just wherever the reader was explicitly navigated to — necessary now that scrolling can
+    // carry the user across chapter (and book) boundaries without an explicit jump.
+    val topVisibleVerse by remember { derivedStateOf { uiState.verses.getOrNull(listState.firstVisibleItemIndex) } }
+    val displayedBookName = topVisibleVerse?.bookName ?: uiState.selectedBookName
+    val displayedChapter = topVisibleVerse?.chapter ?: uiState.selectedChapter
 
     Scaffold(
         topBar = {
             // A compact custom bar instead of Material3's TopAppBar, which enforces a
             // ~64dp minimum height on its own — between that and the language row below,
             // it was eating a large chunk of the screen before any verse text appeared.
-            Surface(tonalElevation = 2.dp) {
+            // Frosted-glass look (matches the study bubble's family of materials) but at much
+            // lower opacity than the bubble itself, since scripture scrolls directly behind it
+            // rather than sitting still underneath dense bubble text — the buttons/dropdowns on
+            // top of the bar keep their own solid fills so they stay legible regardless.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Glass.navPanelBrush())
+                    .border(BorderStroke(0.6.dp, Glass.navPanelBorderBrush()), RectangleShape),
+            ) {
                 Column {
                     // Search-bar/nav-pill row height, standardized so the logo can be sized
                     // exactly 1.6x it and the two flanking controls read as vertically balanced
@@ -168,11 +212,12 @@ fun ReaderScreen(
                                     .weight(1f)
                                     .height(navRowHeight)
                                     .clip(RoundedCornerShape(50))
+                                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), RoundedCornerShape(50))
                                     .border(BorderStroke(1.dp, Glass.buttonBrush()), RoundedCornerShape(50)),
                                 contentPadding = PaddingValues(horizontal = 10.dp),
                             ) {
                                 Text(
-                                    "${uiState.selectedBookName} ${uiState.selectedChapter} ▾",
+                                    "$displayedBookName $displayedChapter ▾",
                                     style = MaterialTheme.typography.titleSmall,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
@@ -261,7 +306,7 @@ fun ReaderScreen(
             ) {
                 val bubble = lastBubble
                 if (bubble != null) {
-                    val verse = uiState.verses.firstOrNull { it.verse == bubble.verseNumber }
+                    val verse = uiState.verses.firstOrNull { it.numericVerseId == bubble.verseId }
                     // No scrim/darkening, and no full-screen click surface here — this box is
                     // sized to the panel's own footprint (bottom-aligned, wrap content) via
                     // ChatBubble's internal BoxWithConstraints, so it never blocks scripture taps
@@ -307,9 +352,9 @@ private fun VerseList(
     uiState: ReaderUiState,
     padding: PaddingValues,
     listState: LazyListState,
-    onSelectionStart: (Int, Int) -> Unit,
-    onSelectionExtend: (Int, Int) -> Unit,
-    onWordToggle: (Int, Int) -> Unit,
+    onSelectionStart: (Long, Int) -> Unit,
+    onSelectionExtend: (Long, Int) -> Unit,
+    onWordToggle: (Long, Int) -> Unit,
     onTranslateVerse: (VerseData) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -324,21 +369,34 @@ private fun VerseList(
     ) {
         items(uiState.verses, key = { it.verseId }) { verse ->
             val tokens = remember(verse.verseId) { VerseTokenizer.tokenize(verse.text) }
-            val bubbleForThisVerse = uiState.chatBubble?.takeIf { it.verseNumber == verse.verse }
+            val bubbleForThisVerse = uiState.chatBubble?.takeIf { it.verseId == verse.numericVerseId }
             val selectedIndices = remember(bubbleForThisVerse) {
                 bubbleForThisVerse?.let { it.wordRange.toSet() + it.queuedWordIndices.toSet() } ?: emptySet()
             }
-            VerseRow(
-                verse = verse,
-                tokens = tokens,
-                selectedIndices = selectedIndices,
-                bubbleOpenForThisVerse = bubbleForThisVerse != null,
-                onSelectionStart = { wordIndex -> onSelectionStart(verse.verse, wordIndex) },
-                onSelectionExtend = { wordIndex -> onSelectionExtend(verse.verse, wordIndex) },
-                onWordToggle = { wordIndex -> onWordToggle(verse.verse, wordIndex) },
-                onTranslateVerse = { onTranslateVerse(verse) },
-                isHighlighted = uiState.highlightedVerse == verse.verse,
-            )
+            Column {
+                // Reading now flows continuously across chapter (and book) boundaries, so a
+                // small inline heading at the start of each new chapter is the only orientation
+                // cue left — there's no longer a hard stop that otherwise made this obvious.
+                if (verse.verse == 1) {
+                    Text(
+                        "${verse.bookName} ${verse.chapter}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 4.dp),
+                    )
+                }
+                VerseRow(
+                    verse = verse,
+                    tokens = tokens,
+                    selectedIndices = selectedIndices,
+                    bubbleOpenForThisVerse = bubbleForThisVerse != null,
+                    onSelectionStart = { wordIndex -> onSelectionStart(verse.numericVerseId, wordIndex) },
+                    onSelectionExtend = { wordIndex -> onSelectionExtend(verse.numericVerseId, wordIndex) },
+                    onWordToggle = { wordIndex -> onWordToggle(verse.numericVerseId, wordIndex) },
+                    onTranslateVerse = { onTranslateVerse(verse) },
+                    isHighlighted = uiState.highlightedVerseId == verse.numericVerseId,
+                )
+            }
         }
     }
 }
@@ -512,7 +570,9 @@ private fun CompactReadingLanguagePicker(
             modifier = Modifier
                 .fillMaxHeight()
                 .clip(RoundedCornerShape(50))
-                .border(BorderStroke(1.dp, Glass.buttonBrush()), RoundedCornerShape(50))
+                // Solid light-blue fill — no gradient — so it reads as one flat pill against
+                // the frosted (translucent) nav bar behind it.
+                .background(Glass.skyBlue, RoundedCornerShape(50))
                 .clickable { expanded = true }
                 .padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -520,11 +580,13 @@ private fun CompactReadingLanguagePicker(
             Text(
                 selected.code.uppercase(),
                 style = MaterialTheme.typography.titleSmall,
+                color = Color.White,
                 maxLines = 1,
             )
             Icon(
                 imageVector = Icons.Filled.ArrowDropDown,
                 contentDescription = "Reading language",
+                tint = Color.White,
                 modifier = Modifier.size(16.dp),
             )
         }

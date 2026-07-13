@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Delete
@@ -155,7 +156,7 @@ fun ChatBubble(
 
                 // Single-word focus: bolded/larger, with pronunciation + a real definition,
                 // shown up top regardless of whether it came from the verse text or a reply.
-                bubble.wordInfo?.let { info -> WordInfoCard(info) }
+                bubble.wordInfo?.let { info -> WordInfoCard(info, onResponseWordTapped) }
 
                 if (bubble.isMinimized) {
                     // Collapsed state (outside-tap): just the word/verse translation, no
@@ -179,13 +180,15 @@ fun ChatBubble(
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(8.dp))
                     }
-                    TappableWords(
-                        text = bubble.initialTranslation,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        onWordTapped = onResponseWordTapped,
-                        animate = !bubble.initialIsLoading,
-                    )
+                    SelectionContainer {
+                        TappableWords(
+                            text = bubble.initialTranslation,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            onWordTapped = onResponseWordTapped,
+                            animate = !bubble.initialIsLoading,
+                        )
+                    }
                 }
 
                 if (hasConversation || bubble.isSendingFollowUp) {
@@ -276,7 +279,10 @@ fun ChatBubble(
                                 .clip(Glass.pillShape)
                                 .background(Glass.buttonBrush(), Glass.pillShape),
                         ) {
-                            Text("Send")
+                            // Explicit white, rather than relying on the inherited button
+                            // content color, since that wasn't reliably showing up against the
+                            // sky-blue → deep-blue gradient fill.
+                            Text("Send", color = Color.White)
                         }
                     }
                 }
@@ -321,12 +327,14 @@ private fun ChatMessageRow(message: ChatMessage, onResponseWordTapped: (String) 
     Column(Modifier.padding(vertical = 4.dp)) {
         Text(label, style = MaterialTheme.typography.labelSmall, fontStyle = FontStyle.Italic)
         if (message.role == ChatRole.ASSISTANT && !message.isError) {
-            TappableWords(
-                text = message.text,
-                style = MaterialTheme.typography.bodyMedium,
-                onWordTapped = onResponseWordTapped,
-                animate = true,
-            )
+            SelectionContainer {
+                TappableWords(
+                    text = message.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    onWordTapped = onResponseWordTapped,
+                    animate = true,
+                )
+            }
         } else if (message.isError) {
             // Failed responses are plain, non-tappable text (not treated as
             // AI-generated content to tap into a definition lookup) so a
@@ -358,6 +366,7 @@ private fun TappableWords(
     onWordTapped: (String) -> Unit,
     fontWeight: FontWeight? = null,
     animate: Boolean = false,
+    modifier: Modifier = Modifier,
 ) {
     val tokens = remember(text) { VerseTokenizer.tokenize(text) }
     val visibleCount = rememberTypewriterProgress(
@@ -367,7 +376,7 @@ private fun TappableWords(
         tickMillis = 55,
         animate = animate,
     )
-    FlowRow {
+    FlowRow(modifier = modifier) {
         tokens.take(visibleCount).forEach { word ->
             Text(
                 text = "$word ",
@@ -382,7 +391,7 @@ private fun TappableWords(
 
 /** Single-word focus card: word bolded at a bigger size, pronunciation, and a real definition. */
 @Composable
-private fun WordInfoCard(info: WordInfoState) {
+private fun WordInfoCard(info: WordInfoState, onResponseWordTapped: (String) -> Unit) {
     Column(Modifier.padding(bottom = 8.dp)) {
         Text(info.word, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         if (info.isLoading) {
@@ -392,15 +401,25 @@ private fun WordInfoCard(info: WordInfoState) {
                 Text("Looking up pronunciation and definition…", style = MaterialTheme.typography.bodySmall, fontStyle = FontStyle.Italic)
             }
         } else {
-            info.pronunciation?.let {
-                Text("/$it/", style = MaterialTheme.typography.bodySmall, fontStyle = FontStyle.Italic, modifier = Modifier.padding(top = 2.dp))
-            }
-            info.definition?.let {
-                com.logos.bibletranslate.ui.theme.TypewriterText(
-                    text = it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
+            // Wrapped in a SelectionContainer so the pronunciation/definition can be
+            // copied like normal text, while the definition's own words stay individually
+            // tappable (same as the rest of the bubble's response text) — selection and
+            // per-word tap-to-look-up aren't mutually exclusive gestures in Compose.
+            SelectionContainer {
+                Column {
+                    info.pronunciation?.let {
+                        Text("/$it/", style = MaterialTheme.typography.bodySmall, fontStyle = FontStyle.Italic, modifier = Modifier.padding(top = 2.dp))
+                    }
+                    info.definition?.let {
+                        TappableWords(
+                            text = it,
+                            style = MaterialTheme.typography.bodyMedium,
+                            onWordTapped = onResponseWordTapped,
+                            animate = true,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
+                }
             }
         }
     }
