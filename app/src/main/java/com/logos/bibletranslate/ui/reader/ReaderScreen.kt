@@ -50,6 +50,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -220,8 +221,9 @@ fun ReaderScreen(
             // or fully closed depending on which side of the halfway point it's on.
             val coroutineScope = rememberCoroutineScope()
             val density = LocalDensity.current
-            // Just enough to reveal one row of controls — not a full drawer.
-            val maxPanelHeight = 56.dp
+            // Just enough to reveal one row of controls — not a full drawer. Sized to
+            // comfortably fit the enlarged logo in the middle of the row.
+            val maxPanelHeight = 76.dp
             val panelHeight = remember { Animatable(0.dp, Dp.VectorConverter) }
 
             Box(
@@ -309,21 +311,27 @@ fun ReaderScreen(
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
+                                // Doubles as the only settings toggle for now: tapping it
+                                // flips dark mode, and its own icon swaps to reflect the
+                                // current state (gear → moon) so the toggle is visible without
+                                // adding a separate row.
                                 Icon(
-                                    imageVector = Icons.Filled.Settings,
-                                    contentDescription = "Settings",
+                                    imageVector = if (Glass.isDarkMode) Icons.Filled.DarkMode else Icons.Filled.Settings,
+                                    contentDescription = "Toggle dark mode",
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(20.dp),
+                                    modifier = Modifier
+                                        .size(20.dp)
+                                        .clickable { Glass.toggleDarkMode() },
                                 )
                                 AccentMarble(theme = AccentTheme.SkyDeep)
                                 AccentMarble(theme = AccentTheme.SkyDeepPurple)
-                                // The Jesus-with-people logo — deliberately ~2x the marbles'
-                                // diameter so it reads clearly instead of shrinking into an
-                                // indistinct blob at icon size.
+                                // The Jesus-with-people logo — enlarged further so it reads
+                                // clearly instead of shrinking into an indistinct blob at icon
+                                // size.
                                 Image(
                                     painter = painterResource(R.drawable.logo_jesus_group),
                                     contentDescription = null,
-                                    modifier = Modifier.size(44.dp),
+                                    modifier = Modifier.size(66.dp),
                                 )
                                 AccentMarble(theme = AccentTheme.LightDarkPurple)
                                 AccentMarble(theme = AccentTheme.LightDarkRed)

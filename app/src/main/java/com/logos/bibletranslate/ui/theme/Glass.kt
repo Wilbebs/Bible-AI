@@ -61,6 +61,18 @@ object Glass {
         selectedAccentTheme = theme
     }
 
+    /**
+     * App-wide dark mode, toggled from the nav bar's settings gear. Lives here alongside
+     * [selectedAccentTheme] since both are the same kind of thing — a global UI preference
+     * many unrelated composables need to react to without prop-threading.
+     */
+    var isDarkMode by mutableStateOf(false)
+        private set
+
+    fun toggleDarkMode() {
+        isDarkMode = !isDarkMode
+    }
+
     private val accentColors: List<Color> get() = selectedAccentTheme.colors
 
     /** Sky blue (or the current theme's first/dominant tone) — the majority tone in the two-tone glow/button palette. */
