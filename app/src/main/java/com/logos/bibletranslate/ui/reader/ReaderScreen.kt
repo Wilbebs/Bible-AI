@@ -40,6 +40,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -209,10 +210,10 @@ fun ReaderScreen(
             val outerMargin = 0.dp
             val rowHorizontalPadding = 16.dp
             val rowVerticalPadding = 12.dp
-            // Square across the top (flush with the very top of the screen) but rounded off
-            // along the bottom edge — a bit more than the original bottom-rounded pass — so
-            // the bar reads as a soft-edged panel rather than a hard-edged slab.
-            val navBarShape = RoundedCornerShape(topStart = 0.dp, topEnd = 0.dp, bottomStart = 26.dp, bottomEnd = 26.dp)
+            // Square across the top (flush with the very top of the screen), with the bottom
+            // corners diagonally cut rather than rounded — an angular, "drawer being pulled
+            // open" look instead of a soft pill edge.
+            val navBarShape = CutCornerShape(topStart = 0.dp, topEnd = 0.dp, bottomStart = 20.dp, bottomEnd = 20.dp)
 
             // Drag-down handle: pulling the little chevron down reveals a settings drawer
             // beneath the main nav row, up to maxPanelHeight; releasing snaps it fully open
@@ -231,7 +232,11 @@ fun ReaderScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = outerMargin, vertical = outerMargin)
-                        .shadow(elevation = 6.dp, shape = navBarShape)
+                        // No elevation shadow: the bar sits flush edge-to-edge (outerMargin is
+                        // 0), so there's no surrounding space for a real drop shadow to render
+                        // into — all it produced was a faint stray outline bleeding past the
+                        // clipped shape at the bottom corners, reading as a phantom second
+                        // layer/border. A flush, semi-transparent bar doesn't need one.
                         .clip(navBarShape)
                         .background(Glass.navBarBrush()),
                     contentAlignment = Alignment.TopCenter,
@@ -294,7 +299,7 @@ fun ReaderScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(panelHeight.value)
-                                .clip(RoundedCornerShape(bottomStart = 26.dp, bottomEnd = 26.dp)),
+                                .clip(CutCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp)),
                             contentAlignment = Alignment.Center,
                         ) {
                             Row(
@@ -312,10 +317,13 @@ fun ReaderScreen(
                                 )
                                 AccentMarble(theme = AccentTheme.SkyDeep)
                                 AccentMarble(theme = AccentTheme.SkyDeepPurple)
+                                // The Jesus-with-people logo — deliberately ~2x the marbles'
+                                // diameter so it reads clearly instead of shrinking into an
+                                // indistinct blob at icon size.
                                 Image(
                                     painter = painterResource(R.drawable.logo_jesus_group),
                                     contentDescription = null,
-                                    modifier = Modifier.size(26.dp),
+                                    modifier = Modifier.size(44.dp),
                                 )
                                 AccentMarble(theme = AccentTheme.LightDarkPurple)
                                 AccentMarble(theme = AccentTheme.LightDarkRed)
