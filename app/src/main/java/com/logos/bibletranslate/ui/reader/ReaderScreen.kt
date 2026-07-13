@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,6 +28,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -200,17 +202,21 @@ fun ReaderScreen(
                         // home here, right next to the book/chapter control it's paired with.
                         Row(
                             modifier = Modifier.weight(1f),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             // Single fluid book→chapter entry point (replaces the separate "Ch."
                             // button — chapter navigation now lives inside the same picker).
-                            // Shrunk to the nav row's height and no longer forced full-width, to
-                            // make room for the reading-language pill beside it.
+                            // Sized to its own content (capped so a long book name can't crowd
+                            // out the language pill next to it) rather than stretched to fill
+                            // the whole left cluster — the two pills sitting snug against each
+                            // other, both hugging the left edge, reads far more deliberate than
+                            // one control ballooning to eat all the leftover space.
                             TextButton(
                                 onClick = { showBookChapterPicker = true },
                                 modifier = Modifier
-                                    .weight(1f)
                                     .height(navRowHeight)
+                                    .widthIn(max = 132.dp)
                                     .clip(RoundedCornerShape(50))
                                     .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), RoundedCornerShape(50))
                                     .border(BorderStroke(1.dp, Glass.buttonBrush()), RoundedCornerShape(50)),
@@ -223,7 +229,6 @@ fun ReaderScreen(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             }
-                            Spacer(Modifier.width(6.dp))
                             CompactReadingLanguagePicker(
                                 selected = uiState.language,
                                 options = BibleLanguage.entries,
@@ -323,6 +328,7 @@ fun ReaderScreen(
                         onSend = viewModel::onSendFollowUp,
                         onChipTapped = viewModel::onChipTapped,
                         onResponseWordTapped = viewModel::onResponseWordTapped,
+                        onDefinitionWordTapped = viewModel::onDefinitionWordTapped,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

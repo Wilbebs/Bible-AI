@@ -36,6 +36,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -60,10 +61,12 @@ import com.logos.bibletranslate.ui.theme.Glass
 import com.logos.bibletranslate.ui.theme.Sparkle
 import com.logos.bibletranslate.ui.theme.geminiGlowBorder
 import com.logos.bibletranslate.ui.theme.rememberTypewriterProgress
+import kotlinx.coroutines.delay
 
 /**
- * Follow-up placeholder pool — one is picked per bubble open (via [ChatBubbleState.openSequence]),
- * not cycled on a timer, so it stays put for the whole time this bubble is on screen.
+ * Follow-up placeholder pool — cycles automatically every [SUGGESTION_CYCLE_MILLIS] while the
+ * bubble is open and the input is untouched, so the user sees a variety of things they could ask
+ * rather than only ever "translate to X" (which used to be the whole pool).
  */
 private val FALLBACK_FOLLOWUP_SUGGESTIONS = listOf(
     "Translate to Hebrew",
@@ -71,7 +74,15 @@ private val FALLBACK_FOLLOWUP_SUGGESTIONS = listOf(
     "Translate to Aramaic",
     "Translate to Latin",
     "Deep dive on this verse",
+    "Explain the historical context",
+    "What's the significance of this verse?",
+    "Any cross-references I should know?",
+    "Break down the key words here",
+    "How have scholars interpreted this?",
+    "What does this teach us today?",
 )
+
+private const val SUGGESTION_CYCLE_MILLIS = 12_000L
 
 /**
  * The tap/verse-translate popup as a scoped mini-chat (chat-feature-addendum).
@@ -95,6 +106,7 @@ fun ChatBubble(
     onSend: () -> Unit,
     onChipTapped: (String) -> Unit,
     onResponseWordTapped: (String) -> Unit,
+    onDefinitionWordTapped: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val hasConversation = bubble.messages.isNotEmpty()
@@ -156,7 +168,7 @@ fun ChatBubble(
 
                 // Single-word focus: bolded/larger, with pronunciation + a real definition,
                 // shown up top regardless of whether it came from the verse text or a reply.
-                bubble.wordInfo?.let { info -> WordInfoCard(info, onResponseWordTapped) }
+                bubble.wordInfo?.let { info -> WordInfoCard(info, onDefinitionWordTapped) }
 
                 if (bubble.isMinimized) {
                     // Collapsed state (outside-tap): just the word/verse translation, no
@@ -212,13 +224,19 @@ fun ChatBubble(
                         modifier = Modifier.padding(top = 8.dp),
                     )
                 } else {
-                    // One suggestion is picked per bubble open (via openSequence) and stays put
-                    // for as long as this bubble is on screen — no more auto-cycling on a timer.
-                    val currentSuggestion = remember(bubble.openSequence) {
-                        FALLBACK_FOLLOWUP_SUGGESTIONS[bubble.openSequence % FALLBACK_FOLLOWUP_SUGGESTIONS.size]
+                    // Starts wherever openSequence lands (so different bubble opens don't all show
+                    // the same first suggestion), then cycles through the whole pool automatically
+                    // every 12s for as long as this bubble stays open on this verse.
+                    var suggestionIndex by remember(bubble.openSequence) { mutableIntStateOf(bubble.openSequence) }
+                    LaunchedEffect(bubble.openSequence) {
+                        while (true) {
+                            delay(SUGGESTION_CYCLE_MILLIS)
+                            suggestionIndex++
+                        }
                     }
-                    val typedSuggestion = remember(bubble.openSequence) {
-                        // Typed out once when it first appears for this open; doesn't re-animate on recomposition.
+                    val currentSuggestion = FALLBACK_FOLLOWUP_SUGGESTIONS[suggestionIndex % FALLBACK_FOLLOWUP_SUGGESTIONS.size]
+                    val typedSuggestion = remember(currentSuggestion) {
+                        // Typed out once when each new suggestion appears; doesn't re-animate on recomposition.
                         currentSuggestion
                     }.let { text ->
                         val visibleChars = rememberTypewriterProgress(
@@ -389,9 +407,14 @@ private fun TappableWords(
     }
 }
 
-/** Single-word focus card: word bolded at a bigger size, pronunciation, and a real definition. */
+/**
+ * Single-word focus card: word bolded at a bigger size, pronunciation, and a real definition.
+ * Tapping a word *inside* the definition drills one level deeper — via [onDefinitionWordTapped],
+ * a distinct gesture from tapping a word in a chat reply — replacing this card with a fresh
+ * lookup for that word instead of folding it into the multi-word follow-up autofill queue.
+ */
 @Composable
-private fun WordInfoCard(info: WordInfoState, onResponseWordTapped: (String) -> Unit) {
+private fun WordInfoCard(info: WordInfoState, onDefinitionWordTapped: (String) -> Unit) {
     Column(Modifier.padding(bottom = 8.dp)) {
         Text(info.word, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         if (info.isLoading) {
@@ -414,7 +437,7 @@ private fun WordInfoCard(info: WordInfoState, onResponseWordTapped: (String) -> 
                         TappableWords(
                             text = it,
                             style = MaterialTheme.typography.bodyMedium,
-                            onWordTapped = onResponseWordTapped,
+                            onWordTapped = onDefinitionWordTapped,
                             animate = true,
                             modifier = Modifier.padding(top = 2.dp),
                         )

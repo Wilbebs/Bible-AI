@@ -97,15 +97,16 @@ class VerseChatClient {
     suspend fun fetchWordInfo(
         apiKey: String,
         word: String,
-        languageName: String,
+        wordLanguageName: String,
+        responseLanguageName: String,
         verseRef: String,
         verseContext: String,
     ): Result<Pair<String, String>> {
         val systemInstruction = """
-            The word "$word" appears in $languageName in this Bible verse ($verseRef): "$verseContext"
+            The word "$word" appears in $wordLanguageName in this Bible verse ($verseRef): "$verseContext"
             Provide:
-            1. A simple, easy-to-read phonetic pronunciation guide for "$word" (not IPA — spelled out for a learner, e.g. "boh-NEE-toh").
-            2. A concise dictionary-style definition (one sentence) of "$word" as used in this context.
+            1. A simple, easy-to-read phonetic pronunciation guide for "$word" (not IPA — spelled out for a learner, e.g. "boh-NEE-toh"). Keep this spelled-out guide itself readable regardless of language.
+            2. A concise dictionary-style definition (one sentence) of "$word" as used in this context, written in $responseLanguageName.
             Respond as JSON: {"pronunciation": "...", "definition": "..."}.
         """.trimIndent()
         return callGemini(apiKey, systemInstruction, emptyList(), "Look up this word.", responseSchema = WORD_INFO_RESPONSE_SCHEMA)
