@@ -88,15 +88,15 @@ object Glass {
      */
     fun navBarBrush(): Brush = Brush.linearGradient(
         colors = listOf(
-            Color.White.copy(alpha = 0.9f),
-            Color.White.copy(alpha = 0.82f),
-            Color.White.copy(alpha = 0.88f),
+            Color.White.copy(alpha = 0.63f),
+            Color.White.copy(alpha = 0.57f),
+            Color.White.copy(alpha = 0.62f),
         ),
     )
 
     /** A bright edge around the frosted nav bar card, echoing [panelBorderBrush]. */
     fun navBarBorderBrush(): Brush = Brush.linearGradient(
-        colors = listOf(Color.White.copy(alpha = 0.85f), Color.White.copy(alpha = 0.25f)),
+        colors = listOf(Color.White.copy(alpha = 0.6f), Color.White.copy(alpha = 0.18f)),
     )
 }
 

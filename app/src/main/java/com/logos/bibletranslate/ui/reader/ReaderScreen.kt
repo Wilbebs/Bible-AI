@@ -1,11 +1,13 @@
 package com.logos.bibletranslate.ui.reader
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.background
@@ -30,6 +32,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -40,8 +43,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.Image
-import androidx.compose.ui.res.painterResource
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Search
@@ -86,7 +87,6 @@ import com.logos.bibletranslate.data.VerseChatCache
 import com.logos.bibletranslate.data.VerseChatClient
 import com.logos.bibletranslate.data.VerseData
 import com.logos.bibletranslate.data.VerseTokenizer
-import com.logos.bibletranslate.R
 import com.logos.bibletranslate.data.WordTranslationRepository
 import com.logos.bibletranslate.ui.theme.Glass
 import com.logos.bibletranslate.ui.theme.Sparkle
@@ -167,49 +167,63 @@ fun ReaderScreen(
     val displayedBookName = topVisibleVerse?.bookName ?: uiState.selectedBookName
     val displayedChapter = topVisibleVerse?.chapter ?: uiState.selectedChapter
 
+    // Collapses the navbar from an edge-to-edge rectangle into a content-hugging pill once the
+    // list has scrolled down more than a few dozen pixels — mirrors the Insureit navbar pattern.
+    // firstVisibleItemScrollOffset alone would reset to 0 every time a new item becomes the
+    // first visible one, so any further scroll (index > 0) also counts as "scrolled".
+    val isNavBarCollapsed by remember {
+        derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 50 }
+    }
+
     Scaffold(
         topBar = {
             // A compact custom bar instead of Material3's TopAppBar, which enforces a
             // ~64dp minimum height on its own — between that and the language row below,
             // it was eating a large chunk of the screen before any verse text appeared.
-            // Built as an actual navbar card now: one glass container spanning the whole top of
-            // the screen (status bar inset included), holding every nav control and the logo,
+            // Built as an actual navbar card: one glass container holding every nav control,
             // with a soft rounded bottom edge and a bright rim so it reads as a distinct panel
-            // rather than a bare row floating over the verse text. Slightly more see-through
-            // than the study bubble's own panel (Glass.navBarBrush vs Glass.panelBrush) since
-            // scripture keeps scrolling directly behind it — the buttons/dropdowns inside keep
-            // their own solid fills so they stay legible regardless.
+            // rather than a bare row floating over the verse text. More see-through than the
+            // study bubble's own panel (Glass.navBarBrush vs Glass.panelBrush) since scripture
+            // keeps scrolling directly behind it — the buttons/dropdowns inside keep their own
+            // solid fills so they stay legible regardless.
+            //
+            // Starts as a full-width rectangle (square top corners, rounded bottom) flush with
+            // the top of the screen. Past the scroll threshold above, it morphs into a small
+            // floating pill sized to just fit its buttons: animateContentSize() smoothly
+            // interpolates the width/height change (fillMaxWidth -> wrapContentWidth), while the
+            // corner radii and outer margin animate in lockstep via animateDpAsState so the shape
+            // and the "floating" gap appear together rather than snapping.
+            val topCornerRadius by animateDpAsState(if (isNavBarCollapsed) 999.dp else 0.dp, label = "navBarTopCorner")
+            val bottomCornerRadius by animateDpAsState(if (isNavBarCollapsed) 999.dp else 20.dp, label = "navBarBottomCorner")
+            val outerHorizontalMargin by animateDpAsState(if (isNavBarCollapsed) 16.dp else 0.dp, label = "navBarMargin")
+            val outerTopMargin by animateDpAsState(if (isNavBarCollapsed) 8.dp else 0.dp, label = "navBarTopMargin")
+            val navBarShape = RoundedCornerShape(
+                topStart = topCornerRadius, topEnd = topCornerRadius,
+                bottomStart = bottomCornerRadius, bottomEnd = bottomCornerRadius,
+            )
+
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(elevation = 6.dp, shape = RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))
-                    .clip(RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))
-                    .background(Glass.navBarBrush())
-                    .border(
-                        BorderStroke(0.8.dp, Glass.navBarBorderBrush()),
-                        RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp),
-                    ),
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.TopCenter,
             ) {
-                Column {
-                    // Search-bar/nav-pill row height, standardized so the logo can be sized
-                    // exactly 1.6x it and the two flanking controls read as vertically balanced
-                    // against it.
-                    val navRowHeight = 32.dp
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .windowInsetsPadding(WindowInsets.statusBars)
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        // Left cluster: book→chapter picker plus the reading-language pill,
-                        // sharing the same weight the search bar gets on the right so the
-                        // centered logo stays balanced. The old separate "Reading → Translate
-                        // to" row is gone — "translate to" now lives entirely in the study
-                        // bubble's own language dropdown, so only "reading language" needs a
-                        // home here, right next to the book/chapter control it's paired with.
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = outerHorizontalMargin, vertical = outerTopMargin)
+                        .then(if (isNavBarCollapsed) Modifier.wrapContentWidth() else Modifier.fillMaxWidth())
+                        .animateContentSize()
+                        .shadow(elevation = 6.dp, shape = navBarShape)
+                        .clip(navBarShape)
+                        .background(Glass.navBarBrush())
+                        .border(BorderStroke(0.8.dp, Glass.navBarBorderBrush()), navBarShape),
+                ) {
+                    Column {
+                        // Search-bar/nav-pill row height — the controls are vertically balanced
+                        // against this shared height.
+                        val navRowHeight = 32.dp
                         Row(
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .windowInsetsPadding(WindowInsets.statusBars)
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -243,17 +257,6 @@ fun ReaderScreen(
                                 onSelected = viewModel::onLanguageSelected,
                                 modifier = Modifier.height(navRowHeight),
                             )
-                        }
-                        // Center logo — sized relative to the flanking controls (~1.6x their
-                        // height) so it reads as the visual anchor between them.
-                        Image(
-                            painter = painterResource(R.drawable.logo_jesus_group),
-                            contentDescription = null,
-                            modifier = Modifier
-                                .height(navRowHeight * 1.6f)
-                                .padding(horizontal = 6.dp),
-                        )
-                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
                             VerseSearchBar(
                                 books = uiState.books,
                                 onSubmit = viewModel::onVerseSearchSubmitted,

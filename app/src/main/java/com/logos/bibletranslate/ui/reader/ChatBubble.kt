@@ -284,8 +284,15 @@ fun ChatBubble(
                                 focusedIndicatorColor = Color.Transparent,
                                 unfocusedIndicatorColor = Color.Transparent,
                                 disabledIndicatorColor = Color.Transparent,
-                                // No caret at all until the user actually taps into the field.
-                                cursorColor = if (isInputFocused) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                // No caret while the field is empty — otherwise it blinks in
+                                // front of the placeholder the whole time suggestions are
+                                // auto-cycling, which reads as "stuck" every time a new one pops
+                                // in. It only appears once the user has actually typed something.
+                                cursorColor = if (isInputFocused && bubble.followUpInput.isNotEmpty()) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    Color.Transparent
+                                },
                             ),
                         )
                         Spacer(Modifier.width(4.dp))
