@@ -80,22 +80,23 @@ object Glass {
     fun buttonBrush(): Brush = Brush.linearGradient(colors = listOf(skyBlue, deepBlue))
 
     /**
-     * Frosted-glass nav bar background — same diagonal-sheen family as [panelBrush], but far
-     * lower opacity, since the bar has no dense text of its own sitting directly against it
-     * (unlike the study panel). Opacity is deliberately kept on the buttons/dropdowns that sit
-     * on top of the bar instead, so those stay legible while the bar itself reads as glass.
+     * Frosted-glass nav bar background — same diagonal-sheen family as [panelBrush] (the study
+     * bubble's panel), but a touch more see-through than it: the bar is a real card of its own
+     * now (buttons, logo and search all sitting inside one glass container), and scripture keeps
+     * scrolling directly behind it, so it reads best pitched just below the bubble's near-solid
+     * opacity rather than matching it exactly.
      */
-    fun navPanelBrush(): Brush = Brush.linearGradient(
+    fun navBarBrush(): Brush = Brush.linearGradient(
         colors = listOf(
-            Color.White.copy(alpha = 0.32f),
-            Color.White.copy(alpha = 0.16f),
-            Color.White.copy(alpha = 0.28f),
+            Color.White.copy(alpha = 0.9f),
+            Color.White.copy(alpha = 0.82f),
+            Color.White.copy(alpha = 0.88f),
         ),
     )
 
-    /** A faint bright edge along the bottom of the frosted nav bar, echoing [panelBorderBrush] at lower opacity. */
-    fun navPanelBorderBrush(): Brush = Brush.linearGradient(
-        colors = listOf(Color.White.copy(alpha = 0.55f), Color.White.copy(alpha = 0.1f)),
+    /** A bright edge around the frosted nav bar card, echoing [panelBorderBrush]. */
+    fun navBarBorderBrush(): Brush = Brush.linearGradient(
+        colors = listOf(Color.White.copy(alpha = 0.85f), Color.White.copy(alpha = 0.25f)),
     )
 }
 

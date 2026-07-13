@@ -69,8 +69,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -172,15 +172,23 @@ fun ReaderScreen(
             // A compact custom bar instead of Material3's TopAppBar, which enforces a
             // ~64dp minimum height on its own — between that and the language row below,
             // it was eating a large chunk of the screen before any verse text appeared.
-            // Frosted-glass look (matches the study bubble's family of materials) but at much
-            // lower opacity than the bubble itself, since scripture scrolls directly behind it
-            // rather than sitting still underneath dense bubble text — the buttons/dropdowns on
-            // top of the bar keep their own solid fills so they stay legible regardless.
+            // Built as an actual navbar card now: one glass container spanning the whole top of
+            // the screen (status bar inset included), holding every nav control and the logo,
+            // with a soft rounded bottom edge and a bright rim so it reads as a distinct panel
+            // rather than a bare row floating over the verse text. Slightly more see-through
+            // than the study bubble's own panel (Glass.navBarBrush vs Glass.panelBrush) since
+            // scripture keeps scrolling directly behind it — the buttons/dropdowns inside keep
+            // their own solid fills so they stay legible regardless.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Glass.navPanelBrush())
-                    .border(BorderStroke(0.6.dp, Glass.navPanelBorderBrush()), RectangleShape),
+                    .shadow(elevation = 6.dp, shape = RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))
+                    .clip(RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))
+                    .background(Glass.navBarBrush())
+                    .border(
+                        BorderStroke(0.8.dp, Glass.navBarBorderBrush()),
+                        RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp),
+                    ),
             ) {
                 Column {
                     // Search-bar/nav-pill row height, standardized so the logo can be sized
@@ -191,7 +199,7 @@ fun ReaderScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .windowInsetsPadding(WindowInsets.statusBars)
-                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // Left cluster: book→chapter picker plus the reading-language pill,
