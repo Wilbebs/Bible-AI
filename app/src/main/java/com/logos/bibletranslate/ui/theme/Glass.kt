@@ -131,13 +131,15 @@ object Glass {
      * gradient. A gradient brush spans the whole composable's bounds, and across a bar this
      * wide but this short, the diagonal color shift reads as visible banding/seams (especially
      * around the rounded pill corners) instead of a clean sheet of glass. A single uniform
-     * alpha avoids that "artifacting" — still see-through enough for scripture to read faintly
-     * behind it, but solid enough that the bar itself is unmistakably one continuous panel.
+     * alpha avoids that "artifacting". Raised to match the same near-opaque frosted-glass
+     * aesthetic as the AI window's panel (was 0.6 — noticeably more see-through than the
+     * panel, which read as inconsistent) while keeping just enough translucency that it still
+     * reads as glass rather than a solid bar.
      */
     fun navBarBrush(): Brush {
         val base = if (isDarkMode) Color(0xFF10122A) else Color.White
         return Brush.linearGradient(
-            colors = listOf(base.copy(alpha = 0.6f), base.copy(alpha = 0.6f)),
+            colors = listOf(base.copy(alpha = 0.94f), base.copy(alpha = 0.94f)),
         )
     }
 }

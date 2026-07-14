@@ -393,14 +393,19 @@ fun ReaderScreen(
             // fully interactable (scrollable, tappable, selectable) while the bubble is open. This
             // only fires for taps that land somewhere neither the verse list nor the panel itself
             // handles (e.g. blank space below the last verse).
-            if (isBubbleOpen) {
+            // Also shown while a verse is triple-tap-locked even without an open bubble (e.g.
+            // after the panel was closed) so a tap on blank space can still release the lock.
+            if (isBubbleOpen || uiState.lockedVerseId != null) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            onClick = viewModel::onBubbleOutsideTap,
+                            onClick = {
+                                viewModel.onBubbleOutsideTap()
+                                viewModel.onOutsideAllVersesTap()
+                            },
                         ),
                 )
             }
@@ -418,6 +423,8 @@ fun ReaderScreen(
                     onSelectionExtend = viewModel::onSelectionExtend,
                     onWordToggle = viewModel::onVerseWordTapped,
                     onTranslateVerse = viewModel::onTranslateVerseRequested,
+                    onGestureDown = viewModel::onVerseGestureDown,
+                    onVerseLocked = viewModel::lockVerse,
                 )
             }
 
@@ -488,6 +495,8 @@ private fun VerseList(
     onSelectionExtend: (Long, Int) -> Unit,
     onWordToggle: (Long, Int) -> Unit,
     onTranslateVerse: (VerseData) -> Unit,
+    onGestureDown: (Long) -> Unit,
+    onVerseLocked: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -529,6 +538,9 @@ private fun VerseList(
                     onWordToggle = { wordIndex -> onWordToggle(verse.numericVerseId, wordIndex) },
                     onTranslateVerse = { onTranslateVerse(verse) },
                     isHighlighted = uiState.highlightedVerseId == verse.numericVerseId,
+                    isLocked = uiState.lockedVerseId == verse.numericVerseId,
+                    onGestureDown = { onGestureDown(verse.numericVerseId) },
+                    onVerseLocked = { onVerseLocked(verse.numericVerseId) },
                 )
             }
         }

@@ -129,6 +129,13 @@ data class ReaderUiState(
     val verseDialog: VerseDialogData? = null,
     /** Set by an exact verse search — drives the scroll-to + slow pulsing highlight, and self-clears after a while. */
     val highlightedVerseId: Long? = null,
+    /**
+     * Set right after a triple-tap selects a whole verse (translation in flight/shown). While
+     * set, further taps *on this same verse* are inert — guards against an accidental 4th/5th
+     * tap re-triggering or disturbing the selection mid-translation. Cleared only by a tap
+     * outside this verse (another verse, or blank space), never by a timer.
+     */
+    val lockedVerseId: Long? = null,
     /** Continuous-scroll pagination state — [verses] is lazily extended in both directions as the user nears either edge. */
     val isLoadingMoreTop: Boolean = false,
     val isLoadingMoreBottom: Boolean = false,
@@ -217,6 +224,27 @@ class ReaderViewModel(
     /** Tap-down or drag-start on a word (§5). */
     fun onSelectionStart(verseId: Long, wordIndex: Int) {
         updateSelection(verseId, wordIndex..wordIndex)
+    }
+
+    /** Locks a just-triple-tapped verse against further taps until an outside tap releases it. */
+    fun lockVerse(verseId: Long) {
+        _uiState.value = _uiState.value.copy(lockedVerseId = verseId)
+    }
+
+    /**
+     * Fired at the very start of every gesture on a verse row (before any tap/hold logic runs).
+     * A down on a *different* verse than the one currently locked counts as "outside the
+     * locked verse" and releases the lock; a down on the locked verse itself is a no-op here
+     * (the row's own gesture code is what ignores it).
+     */
+    fun onVerseGestureDown(verseId: Long) {
+        val locked = _uiState.value.lockedVerseId ?: return
+        if (locked != verseId) _uiState.value = _uiState.value.copy(lockedVerseId = null)
+    }
+
+    /** Blank-space taps (below the last verse, outside the panel) also count as "outside". */
+    fun onOutsideAllVersesTap() {
+        if (_uiState.value.lockedVerseId != null) _uiState.value = _uiState.value.copy(lockedVerseId = null)
     }
 
     /** Drag extending the selection; live-updates the bubble (§5). */

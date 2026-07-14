@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -74,21 +75,57 @@ import kotlinx.coroutines.delay
 /**
  * Follow-up placeholder pool — cycles automatically every [SUGGESTION_CYCLE_MILLIS] while the
  * bubble is open and the input is untouched, so the user sees a variety of things they could ask
- * rather than only ever "translate to X" (which used to be the whole pool).
+ * rather than only ever "translate to X" (which used to be the whole pool). Kept short — a
+ * couple of words each, like the "Translate to X" entries — so nothing gets truncated in the
+ * single-line placeholder slot. One list per bubble reply language, since these are suggested
+ * *questions* the user could ask in that language, not the reading text itself.
  */
-private val FALLBACK_FOLLOWUP_SUGGESTIONS = listOf(
+private val FOLLOWUP_SUGGESTIONS_EN = listOf(
     "Translate to Hebrew",
     "Translate to Greek",
     "Translate to Aramaic",
     "Translate to Latin",
-    "Deep dive on this verse",
-    "Explain the historical context",
-    "What's the significance of this verse?",
-    "Any cross-references I should know?",
-    "Break down the key words here",
-    "How have scholars interpreted this?",
-    "What does this teach us today?",
+    "Verse deep-dive",
+    "Historical context",
+    "Explore cross-references",
+    "Key word breakdown",
+    "Scholarly views",
+    "Modern application",
 )
+
+private val FOLLOWUP_SUGGESTIONS_ES = listOf(
+    "Traducir al hebreo",
+    "Traducir al griego",
+    "Traducir al arameo",
+    "Traducir al latín",
+    "Análisis del versículo",
+    "Contexto histórico",
+    "Ver referencias cruzadas",
+    "Palabras clave",
+    "Interpretaciones académicas",
+    "Aplicación actual",
+)
+
+private val FOLLOWUP_SUGGESTIONS_PT = listOf(
+    "Traduzir para o hebraico",
+    "Traduzir para o grego",
+    "Traduzir para o aramaico",
+    "Traduzir para o latim",
+    "Análise do versículo",
+    "Contexto histórico",
+    "Ver referências cruzadas",
+    "Palavras-chave",
+    "Interpretações acadêmicas",
+    "Aplicação atual",
+)
+
+/** Picks the suggestion pool matching the bubble's current reply language, so the follow-up
+ * prompts shown to the user always read in the language they're about to type/ask in. */
+private fun followUpSuggestionsFor(language: BibleLanguage): List<String> = when (language) {
+    BibleLanguage.EN -> FOLLOWUP_SUGGESTIONS_EN
+    BibleLanguage.ES -> FOLLOWUP_SUGGESTIONS_ES
+    BibleLanguage.PT -> FOLLOWUP_SUGGESTIONS_PT
+}
 
 private const val SUGGESTION_CYCLE_MILLIS = 12_000L
 
@@ -282,7 +319,10 @@ fun ChatBubble(
                             suggestionIndex++
                         }
                     }
-                    val currentSuggestion = FALLBACK_FOLLOWUP_SUGGESTIONS[suggestionIndex % FALLBACK_FOLLOWUP_SUGGESTIONS.size]
+                    // Re-picked whenever the bubble's reply language changes, so the pool (and
+                    // whatever's currently showing) shifts languages right along with it.
+                    val suggestions = remember(bubble.bubbleTargetLanguage) { followUpSuggestionsFor(bubble.bubbleTargetLanguage) }
+                    val currentSuggestion = suggestions[suggestionIndex % suggestions.size]
                     val typedSuggestion = remember(currentSuggestion) {
                         // Typed out once when each new suggestion appears; doesn't re-animate on recomposition.
                         currentSuggestion
@@ -336,11 +376,16 @@ fun ChatBubble(
                             placeholder = {
                                 // Small and strictly single-line so a long suggestion can never
                                 // inflate the field's height — it just trails off in an ellipsis.
+                                // Nudged left a few pixels (the field's own start padding plus
+                                // the leading sparkle icon's gap otherwise pushes it in further
+                                // than the sparkle needs) so longer suggestions have more room
+                                // to read before the ellipsis kicks in.
                                 Text(
                                     typedSuggestion,
                                     style = MaterialTheme.typography.bodySmall,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.offset(x = (-6).dp),
                                 )
                             },
                             leadingIcon = { Sparkle(size = 14.dp) },
@@ -368,11 +413,13 @@ fun ChatBubble(
                                 focusedIndicatorColor = Color.Transparent,
                                 unfocusedIndicatorColor = Color.Transparent,
                                 disabledIndicatorColor = Color.Transparent,
-                                // No caret while the field is empty — otherwise it blinks in
-                                // front of the placeholder the whole time suggestions are
-                                // auto-cycling, which reads as "stuck" every time a new one pops
-                                // in. It only appears once the user has actually typed something.
-                                cursorColor = if (isInputFocused && inputValue.text.isNotEmpty()) {
+                                // No caret while the field is unfocused and empty — otherwise it
+                                // blinks in front of the placeholder the whole time suggestions
+                                // are auto-cycling, which reads as "stuck" every time a new one
+                                // pops in. As soon as the user taps into the field (focuses it),
+                                // the cursor should blink right away as the "ready to type" cue
+                                // — it no longer waits for the first character.
+                                cursorColor = if (isInputFocused) {
                                     MaterialTheme.colorScheme.primary
                                 } else {
                                     Color.Transparent

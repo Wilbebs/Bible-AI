@@ -39,11 +39,13 @@ import com.logos.bibletranslate.data.VerseData
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * How long a finger must stay put on a word before a hold turns into a selection. Deliberately
- * shorter than the platform long-press default (~400–500ms) so selecting feels snappy, but long
- * enough that the incidental touch at the start of a scroll flick never trips it.
+ * How long a finger must stay put on a word before a hold turns into a selection. Long enough
+ * that a natural "press and immediately drag" gesture (intending to scroll, or to drag-select
+ * starting the instant the finger lands) reliably loses the race to the touch-slop check below
+ * instead of occasionally winning it and firing a single-word selection first — 350ms cut it too
+ * close for that; a full 750ms makes "this is a deliberate hold" unambiguous.
  */
-private const val HOLD_TO_SELECT_MILLIS = 350L
+private const val HOLD_TO_SELECT_MILLIS = 750L
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -59,6 +61,13 @@ fun VerseRow(
     modifier: Modifier = Modifier,
     /** Set for a verse search's landing verse — drives the slow sky-blue/dark-blue pulse across every word. */
     isHighlighted: Boolean = false,
+    /** True right after this verse was triple-tap-selected — every further tap on it is inert. */
+    isLocked: Boolean = false,
+    /** Fired at the very start of every gesture here, before any tap logic — lets a tap
+     * elsewhere release a different verse's lock. */
+    onGestureDown: () -> Unit = {},
+    /** Fired when this row's own triple tap fires, to lock it. */
+    onVerseLocked: () -> Unit = {},
 ) {
     // A two-tone (sky-blue ↔ deep-blue) breathing pulse, applied uniformly to every word in
     // the verse so the whole sentence pulses together, not just one word.
@@ -82,6 +91,7 @@ fun VerseRow(
     // was created) so a bubble opened mid-session correctly flips later taps into toggle mode
     // without disturbing a gesture already in progress (tap-word-autofill-idea.md).
     val toggleModeState = rememberUpdatedState(bubbleOpenForThisVerse)
+    val lockedState = rememberUpdatedState(isLocked)
     val haptics = LocalHapticFeedback.current
 
     Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
@@ -104,7 +114,7 @@ fun VerseRow(
                 .pointerInput(verse.verseId) {
                     // Selection is deliberately *not* started by a plain tap anymore — a stray
                     // finger landing mid-scroll used to fire a translation instantly. Now:
-                    //   • hold a word ~350ms → select it
+                    //   • hold a word ~750ms → select it
                     //   • double-tap a word   → select it
                     //   • triple-tap          → select the whole verse
                     //   • slide after any of those → extend the highlight word by word
@@ -112,9 +122,25 @@ fun VerseRow(
                     // Multi-tap bookkeeping survives across gestures in these locals.
                     var tapCount = 0
                     var lastTapUpMillis = 0L
-                    var lastTapIndex = -1
                     awaitEachGesture {
                         val down = awaitFirstDown()
+                        // Always fires first, even on this row's own locked verse — a tap on a
+                        // *different* verse than the one currently locked releases that lock.
+                        onGestureDown()
+                        if (lockedState.value) {
+                            // This verse was just triple-tap-selected; every tap on it is inert
+                            // until an outside tap unlocks it (guards the in-flight/shown
+                            // translation from a stray extra tap). The down IS consumed here —
+                            // not to block scrolling (Compose's list-scroll drag detector
+                            // tolerates an already-consumed down and still starts on movement,
+                            // the same reason dragging over a button inside a scrollable list
+                            // still scrolls it) but so the full-screen outside-tap catcher
+                            // behind the list doesn't also see this same tap as unconsumed and
+                            // mistake a repeat tap *on the locked verse itself* for an "outside"
+                            // tap that would immediately undo the lock.
+                            down.consume()
+                            return@awaitEachGesture
+                        }
                         val isToggleGesture = toggleModeState.value
                         val startIndex = hitTest(down.position, bounds)
                         if (isToggleGesture) {
@@ -133,9 +159,14 @@ fun VerseRow(
                             return@awaitEachGesture
                         }
 
-                        val isMultiTapContinuation =
-                            down.uptimeMillis - lastTapUpMillis <= viewConfiguration.doubleTapTimeoutMillis &&
-                                startIndex == lastTapIndex
+                        // Deliberately *not* requiring the same exact word as the previous tap:
+                        // real fingers land a word or two off between taps, and requiring an
+                        // exact match let that natural imprecision reset the chain, so a
+                        // "triple tap" often fizzled into three independent single taps and the
+                        // verse never got fully selected. Timing alone (within the platform's
+                        // double-tap window) is enough — all taps land within one verse row's
+                        // gesture handler anyway.
+                        val isMultiTapContinuation = down.uptimeMillis - lastTapUpMillis <= viewConfiguration.doubleTapTimeoutMillis
                         val tapNumber = if (isMultiTapContinuation) tapCount + 1 else 1
 
                         var selecting = false
@@ -188,7 +219,6 @@ fun VerseRow(
                                     else -> {
                                         tapCount = 1
                                         lastTapUpMillis = releasedAt
-                                        lastTapIndex = startIndex
                                         return@awaitEachGesture
                                     }
                                 }
@@ -217,7 +247,7 @@ fun VerseRow(
                             // double-tap (word) can escalate to a third tap (whole verse).
                             tapCount = if (tapNumber >= 3) 0 else tapNumber
                             lastTapUpMillis = lastUptime
-                            lastTapIndex = startIndex
+                            if (tapNumber >= 3) onVerseLocked()
                         }
                     }
                 },
