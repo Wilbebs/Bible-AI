@@ -28,12 +28,22 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import com.logos.bibletranslate.data.VerseData
+import kotlinx.coroutines.withTimeoutOrNull
+
+/**
+ * How long a finger must stay put on a word before a hold turns into a selection. Deliberately
+ * shorter than the platform long-press default (~400–500ms) so selecting feels snappy, but long
+ * enough that the incidental touch at the start of a scroll flick never trips it.
+ */
+private const val HOLD_TO_SELECT_MILLIS = 350L
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -72,6 +82,7 @@ fun VerseRow(
     // was created) so a bubble opened mid-session correctly flips later taps into toggle mode
     // without disturbing a gesture already in progress (tap-word-autofill-idea.md).
     val toggleModeState = rememberUpdatedState(bubbleOpenForThisVerse)
+    val haptics = LocalHapticFeedback.current
 
     Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
         // Verse number doubles as the "show this verse in the other two languages"
@@ -91,23 +102,122 @@ fun VerseRow(
                 .weight(1f)
                 .padding(vertical = 3.dp)
                 .pointerInput(verse.verseId) {
+                    // Selection is deliberately *not* started by a plain tap anymore — a stray
+                    // finger landing mid-scroll used to fire a translation instantly. Now:
+                    //   • hold a word ~350ms → select it
+                    //   • double-tap a word   → select it
+                    //   • triple-tap          → select the whole verse
+                    //   • slide after any of those → extend the highlight word by word
+                    // A plain tap (or a touch that moves into a scroll) does nothing.
+                    // Multi-tap bookkeeping survives across gestures in these locals.
+                    var tapCount = 0
+                    var lastTapUpMillis = 0L
+                    var lastTapIndex = -1
                     awaitEachGesture {
                         val down = awaitFirstDown()
                         val isToggleGesture = toggleModeState.value
                         val startIndex = hitTest(down.position, bounds)
                         if (isToggleGesture) {
+                            // Bubble already open on this verse: a plain tap still toggles the
+                            // word in/out of the pending autofill question — the user is already
+                            // deliberately working inside this verse, so no hold gate here.
                             startIndex?.let(onWordToggle)
-                        } else {
-                            startIndex?.let(onSelectionStart)
-                        }
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!change.pressed) break
-                            if (!isToggleGesture && change.positionChanged()) {
-                                hitTest(change.position, bounds)?.let(onSelectionExtend)
-                                change.consume()
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                if (event.changes.none { it.pressed }) break
                             }
+                            return@awaitEachGesture
+                        }
+                        if (startIndex == null) {
+                            tapCount = 0
+                            return@awaitEachGesture
+                        }
+
+                        val isMultiTapContinuation =
+                            down.uptimeMillis - lastTapUpMillis <= viewConfiguration.doubleTapTimeoutMillis &&
+                                startIndex == lastTapIndex
+                        val tapNumber = if (isMultiTapContinuation) tapCount + 1 else 1
+
+                        var selecting = false
+                        when {
+                            tapNumber >= 3 -> {
+                                // Triple tap: the whole verse.
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onSelectionStart(0)
+                                if (tokens.isNotEmpty()) onSelectionExtend(tokens.lastIndex)
+                                selecting = true
+                            }
+                            tapNumber == 2 -> {
+                                // Double tap: select this word (slide extends from it).
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onSelectionStart(startIndex)
+                                selecting = true
+                            }
+                            else -> {
+                                // First tap: nothing happens yet. It becomes a selection only if
+                                // it turns into a hold; a quick release is remembered as a
+                                // potential first tap of a double/triple; movement past touch
+                                // slop hands the gesture over to the scroller untouched.
+                                var releasedAt = -1L
+                                var movedAway = false
+                                val finishedBeforeTimeout = withTimeoutOrNull(HOLD_TO_SELECT_MILLIS) {
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id }
+                                        if (change == null || !change.pressed) {
+                                            releasedAt = change?.uptimeMillis ?: down.uptimeMillis
+                                            return@withTimeoutOrNull
+                                        }
+                                        if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                                            movedAway = true
+                                            return@withTimeoutOrNull
+                                        }
+                                    }
+                                }
+                                when {
+                                    finishedBeforeTimeout == null -> {
+                                        // Finger stayed put past the timeout: hold-to-select.
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onSelectionStart(startIndex)
+                                        selecting = true
+                                    }
+                                    movedAway -> {
+                                        tapCount = 0
+                                        return@awaitEachGesture
+                                    }
+                                    else -> {
+                                        tapCount = 1
+                                        lastTapUpMillis = releasedAt
+                                        lastTapIndex = startIndex
+                                        return@awaitEachGesture
+                                    }
+                                }
+                            }
+                        }
+
+                        if (selecting) {
+                            var extended = false
+                            var lastUptime = down.uptimeMillis
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                lastUptime = change.uptimeMillis
+                                if (!change.pressed) break
+                                if (change.positionChanged()) {
+                                    hitTest(change.position, bounds)?.let { index ->
+                                        if (index != startIndex) extended = true
+                                        onSelectionExtend(index)
+                                    }
+                                    change.consume()
+                                }
+                            }
+                            // Light tick as a slide-extended highlight is let go.
+                            if (extended) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            // A selection release still advances the multi-tap chain, so
+                            // double-tap (word) can escalate to a third tap (whole verse).
+                            tapCount = if (tapNumber >= 3) 0 else tapNumber
+                            lastTapUpMillis = lastUptime
+                            lastTapIndex = startIndex
                         }
                     }
                 },

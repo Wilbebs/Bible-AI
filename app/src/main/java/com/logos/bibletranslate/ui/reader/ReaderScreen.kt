@@ -448,6 +448,7 @@ fun ReaderScreen(
                         onClose = viewModel::onCloseBubble,
                         onStartOver = viewModel::onStartOver,
                         onExpand = viewModel::onExpandBubble,
+                        onDefine = viewModel::onDefineWord,
                         onLanguageChanged = viewModel::onBubbleLanguageChanged,
                         onInputChanged = viewModel::onFollowUpInputChanged,
                         onSend = viewModel::onSendFollowUp,
@@ -520,7 +521,9 @@ private fun VerseList(
                     verse = verse,
                     tokens = tokens,
                     selectedIndices = selectedIndices,
-                    bubbleOpenForThisVerse = bubbleForThisVerse != null,
+                    // Condensed bubbles don't flip taps into toggle-the-question mode — there's
+                    // no visible input to autofill yet, so taps keep their normal gesture rules.
+                    bubbleOpenForThisVerse = bubbleForThisVerse?.isCondensed == false,
                     onSelectionStart = { wordIndex -> onSelectionStart(verse.numericVerseId, wordIndex) },
                     onSelectionExtend = { wordIndex -> onSelectionExtend(verse.numericVerseId, wordIndex) },
                     onWordToggle = { wordIndex -> onWordToggle(verse.numericVerseId, wordIndex) },

@@ -1,5 +1,6 @@
 package com.logos.bibletranslate.ui.reader
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -48,10 +51,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.logos.bibletranslate.data.BibleLanguage
 import com.logos.bibletranslate.data.ChatMessage
@@ -101,6 +109,7 @@ fun ChatBubble(
     onClose: () -> Unit,
     onStartOver: () -> Unit,
     onExpand: () -> Unit,
+    onDefine: () -> Unit,
     onLanguageChanged: (BibleLanguage) -> Unit,
     onInputChanged: (String) -> Unit,
     onSend: () -> Unit,
@@ -125,7 +134,15 @@ fun ChatBubble(
         Surface(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .fillMaxWidth(widthFraction)
+                .then(
+                    if (bubble.isCondensed) {
+                        // Condensed single-word mode hugs its content instead of spanning the
+                        // screen — a small floating chip, not a full study sheet.
+                        Modifier.widthIn(max = maxWidth * widthFraction)
+                    } else {
+                        Modifier.fillMaxWidth(widthFraction)
+                    },
+                )
                 // Clears the system gesture/nav bar at the bottom instead of sitting under it.
                 .navigationBarsPadding()
                 .padding(bottom = 12.dp)
@@ -144,7 +161,21 @@ fun ChatBubble(
             color = Color.Transparent,
             shape = Glass.panelShape,
         ) {
-            Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
+            Column(
+                Modifier
+                    // Grows/shrinks smoothly as words stream into the panel (definitions and
+                    // replies appearing token by token) and as condensed ↔ full layouts swap —
+                    // the window literally expands as generation fills it.
+                    .animateContentSize()
+                    .padding(
+                        horizontal = if (bubble.isCondensed) 14.dp else 18.dp,
+                        vertical = if (bubble.isCondensed) 8.dp else 16.dp,
+                    ),
+            ) {
+                if (bubble.isCondensed) {
+                    CondensedWordRow(bubble, onDefine, onClose)
+                    return@Column
+                }
                 // Sticky header: sparkle + verse label, language dropdown, close/delete.
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Sparkle(size = 14.dp, modifier = Modifier.padding(end = 6.dp))
@@ -168,7 +199,18 @@ fun ChatBubble(
 
                 // Single-word focus: bolded/larger, with pronunciation + a real definition,
                 // shown up top regardless of whether it came from the verse text or a reply.
-                bubble.wordInfo?.let { info -> WordInfoCard(info, onDefinitionWordTapped) }
+                bubble.wordInfo?.let { info ->
+                    WordInfoCard(
+                        info = info,
+                        // Pair "word · translation" inline only when this card shows the very
+                        // word the bubble was opened on — a drill-down or response-word lookup
+                        // has its own word, whose translation this is not.
+                        translation = bubble.selectedSingleWord
+                            ?.takeIf { it == info.word && !bubble.initialIsLoading }
+                            ?.let { bubble.initialTranslation },
+                        onDefinitionWordTapped = onDefinitionWordTapped,
+                    )
+                }
 
                 if (bubble.isMinimized) {
                     // Collapsed state (outside-tap): just the word/verse translation, no
@@ -187,19 +229,25 @@ fun ChatBubble(
 
                 // Initial translation — still the precomputed/live one-shot result, unchanged (§7).
                 // Every word is tappable, same as chat replies (tap-word-autofill clarification).
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (bubble.initialIsLoading) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    SelectionContainer {
-                        TappableWords(
-                            text = bubble.initialTranslation,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            onWordTapped = onResponseWordTapped,
-                            animate = !bubble.initialIsLoading,
-                        )
+                // Hidden when the word-info card above is already carrying this exact translation
+                // inline next to the word, so it doesn't print twice.
+                val translationShownInCard =
+                    bubble.selectedSingleWord != null && bubble.wordInfo?.word == bubble.selectedSingleWord
+                if (!translationShownInCard) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (bubble.initialIsLoading) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        SelectionContainer {
+                            TappableWords(
+                                text = bubble.initialTranslation,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                onWordTapped = onResponseWordTapped,
+                                animate = !bubble.initialIsLoading,
+                            )
+                        }
                     }
                 }
 
@@ -250,6 +298,22 @@ fun ChatBubble(
 
                     var isInputFocused by remember { mutableStateOf(false) }
 
+                    // The field's text + cursor live locally (TextFieldValue) so each keystroke
+                    // applies synchronously — round-tripping every keystroke through the
+                    // ViewModel's StateFlow used to let a stale value overwrite a newer one
+                    // mid-burst, reordering fast typing and teleporting the cursor (the
+                    // "backwards typing" bug). The ViewModel still mirrors the text for its
+                    // send/autofill logic; inputSetSequence marks its *programmatic* writes
+                    // (word-tap autofill, clear-on-send/start-over) and only those sync back in.
+                    var inputValue by remember(bubble.verseId, bubble.openSequence) {
+                        mutableStateOf(TextFieldValue(bubble.followUpInput, TextRange(bubble.followUpInput.length)))
+                    }
+                    LaunchedEffect(bubble.inputSetSequence) {
+                        if (inputValue.text != bubble.followUpInput) {
+                            inputValue = TextFieldValue(bubble.followUpInput, TextRange(bubble.followUpInput.length))
+                        }
+                    }
+
                     Row(
                         Modifier.padding(top = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -257,11 +321,30 @@ fun ChatBubble(
                         // Pill-shaped glass input with a slow, static (non-rotating) sky-blue/
                         // deep-blue pulse around the ring — the "Gemini is ready" affordance.
                         TextField(
-                            value = bubble.followUpInput,
-                            onValueChange = onInputChanged,
-                            placeholder = { Text(typedSuggestion) },
+                            value = inputValue,
+                            onValueChange = {
+                                // Forward every *text* change to the VM mirror unconditionally,
+                                // comparing against the previous local value — not against
+                                // bubble.followUpInput, which is a recomposition snapshot that
+                                // can lag a keystroke behind and swallow a rapid type-then-
+                                // delete edit (leaving the VM sending stale text). Cursor-only
+                                // moves still skip the callback.
+                                val textChanged = it.text != inputValue.text
+                                inputValue = it
+                                if (textChanged) onInputChanged(it.text)
+                            },
+                            placeholder = {
+                                // Small and strictly single-line so a long suggestion can never
+                                // inflate the field's height — it just trails off in an ellipsis.
+                                Text(
+                                    typedSuggestion,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
                             leadingIcon = { Sparkle(size = 14.dp) },
-                            trailingIcon = if (bubble.followUpInput.isBlank()) {
+                            trailingIcon = if (inputValue.text.isBlank()) {
                                 {
                                     IconButton(onClick = { onChipTapped(currentSuggestion) }) {
                                         Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Ask: $currentSuggestion")
@@ -271,7 +354,8 @@ fun ChatBubble(
                             modifier = Modifier
                                 .weight(1f)
                                 .clip(Glass.pillShape)
-                                .background(Color.White.copy(alpha = 0.6f), Glass.pillShape)
+                                // Theme-aware (was hardcoded white, which glared in dark mode).
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f), Glass.pillShape)
                                 .geminiGlowBorder(strokeWidth = 2.2.dp, cornerRadius = 999.dp)
                                 .onFocusChanged { isInputFocused = it.isFocused },
                             singleLine = true,
@@ -288,7 +372,7 @@ fun ChatBubble(
                                 // front of the placeholder the whole time suggestions are
                                 // auto-cycling, which reads as "stuck" every time a new one pops
                                 // in. It only appears once the user has actually typed something.
-                                cursorColor = if (isInputFocused && bubble.followUpInput.isNotEmpty()) {
+                                cursorColor = if (isInputFocused && inputValue.text.isNotEmpty()) {
                                     MaterialTheme.colorScheme.primary
                                 } else {
                                     Color.Transparent
@@ -421,9 +505,34 @@ private fun TappableWords(
  * lookup for that word instead of folding it into the multi-word follow-up autofill queue.
  */
 @Composable
-private fun WordInfoCard(info: WordInfoState, onDefinitionWordTapped: (String) -> Unit) {
+private fun WordInfoCard(info: WordInfoState, translation: String?, onDefinitionWordTapped: (String) -> Unit) {
     Column(Modifier.padding(bottom = 8.dp)) {
-        Text(info.word, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        // "word · translation" — the translation rides inline right next to the word (smaller,
+        // not underlined, dot-separated) instead of as its own block below the card.
+        Text(
+            buildAnnotatedString {
+                withStyle(
+                    SpanStyle(
+                        fontSize = MaterialTheme.typography.headlineSmall.fontSize,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                ) {
+                    append(info.word)
+                }
+                if (translation != null) {
+                    withStyle(
+                        SpanStyle(
+                            fontSize = MaterialTheme.typography.titleMedium.fontSize,
+                            fontWeight = FontWeight.Normal,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                    ) {
+                        append("  ·  $translation")
+                    }
+                }
+            },
+            style = MaterialTheme.typography.headlineSmall,
+        )
         if (info.isLoading) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
                 CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
@@ -452,6 +561,52 @@ private fun WordInfoCard(info: WordInfoState, onDefinitionWordTapped: (String) -
                 }
             }
         }
+    }
+}
+
+/**
+ * Condensed single-word mode: one compact row — "word · translation" plus a Define affordance.
+ * The full study UI (header, conversation, input) only unfolds once the user asks to define,
+ * with the panel growing smoothly out of this chip as the definition streams in.
+ */
+@Composable
+private fun CondensedWordRow(bubble: ChatBubbleState, onDefine: () -> Unit, onClose: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Sparkle(size = 14.dp)
+        Spacer(Modifier.width(8.dp))
+        if (bubble.initialIsLoading) {
+            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(
+            buildAnnotatedString {
+                withStyle(
+                    SpanStyle(
+                        fontSize = MaterialTheme.typography.titleMedium.fontSize,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                ) {
+                    append(bubble.selectedSingleWord.orEmpty())
+                }
+                if (!bubble.initialIsLoading) {
+                    withStyle(
+                        SpanStyle(
+                            fontSize = MaterialTheme.typography.bodyMedium.fontSize,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                    ) {
+                        append("  ·  ${bubble.initialTranslation}")
+                    }
+                }
+            },
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Spacer(Modifier.width(4.dp))
+        TextButton(onClick = onDefine, contentPadding = PaddingValues(horizontal = 10.dp)) {
+            Text("✦ Define", style = MaterialTheme.typography.labelLarge)
+        }
+        TextButton(onClick = onClose, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("✕") }
     }
 }
 

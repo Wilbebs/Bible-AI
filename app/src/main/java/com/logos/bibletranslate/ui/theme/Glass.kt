@@ -96,19 +96,24 @@ object Glass {
     val pillShape = RoundedCornerShape(50)
 
     /**
-     * Frosted panel background: a mostly-opaque, faintly diagonal sheen over content.
-     * Deliberately much closer to solid than a true see-through pane of glass — with
-     * dense verse text sitting directly behind it, a lighter/more transparent fill
-     * made the panel's own text unreadable, so legibility wins over transparency here.
-     * Pushed a little more opaque than earlier passes so text reliably reads over it.
+     * Frosted panel background, vertical: densest through the middle band — where the
+     * panel's text sits — at near-opaque, easing to slightly more translucent top and
+     * bottom edges so the panel still reads as glass rather than card stock. Legibility
+     * wins over transparency where words are; the frost shows at the rims. Vertical (not
+     * diagonal) on purpose: on wide-but-short surfaces a diagonal gradient's color shift
+     * reads as banding/seams (see navBarBrush), and a tall panel fades cleanly top-to-bottom.
      */
-    fun panelBrush(): Brush = Brush.linearGradient(
-        colors = listOf(
-            Color.White.copy(alpha = 0.985f),
-            Color.White.copy(alpha = 0.94f),
-            Color.White.copy(alpha = 0.975f),
-        ),
-    )
+    fun panelBrush(): Brush {
+        val base = if (isDarkMode) Color(0xFF161A33) else Color.White
+        return Brush.verticalGradient(
+            colors = listOf(
+                base.copy(alpha = 0.88f),
+                base.copy(alpha = 0.985f),
+                base.copy(alpha = 0.985f),
+                base.copy(alpha = 0.92f),
+            ),
+        )
+    }
 
     /** A thin bright edge, like light catching the rim of a glass pane. */
     fun panelBorderBrush(): Brush = Brush.linearGradient(
@@ -129,9 +134,12 @@ object Glass {
      * alpha avoids that "artifacting" — still see-through enough for scripture to read faintly
      * behind it, but solid enough that the bar itself is unmistakably one continuous panel.
      */
-    fun navBarBrush(): Brush = Brush.linearGradient(
-        colors = listOf(Color.White.copy(alpha = 0.6f), Color.White.copy(alpha = 0.6f)),
-    )
+    fun navBarBrush(): Brush {
+        val base = if (isDarkMode) Color(0xFF10122A) else Color.White
+        return Brush.linearGradient(
+            colors = listOf(base.copy(alpha = 0.6f), base.copy(alpha = 0.6f)),
+        )
+    }
 }
 
 /**
