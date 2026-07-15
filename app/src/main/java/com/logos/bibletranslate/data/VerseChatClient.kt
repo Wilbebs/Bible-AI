@@ -26,9 +26,10 @@ private val WORD_INFO_RESPONSE_SCHEMA = JSONObject()
         "properties",
         JSONObject()
             .put("pronunciation", JSONObject().put("type", "STRING"))
-            .put("definition", JSONObject().put("type", "STRING")),
+            .put("definition", JSONObject().put("type", "STRING"))
+            .put("translation", JSONObject().put("type", "STRING")),
     )
-    .put("required", JSONArray().put("pronunciation").put("definition"))
+    .put("required", JSONArray().put("pronunciation").put("definition").put("translation"))
 
 /**
  * Scoped mini-chatbot for a single selected verse/word (addendum §2). Every
@@ -90,29 +91,45 @@ class VerseChatClient {
     }
 
     /**
-     * A single word's pronunciation + a real dictionary-style definition (not just its
-     * translation), grounded in the verse it appears in for the correct sense. Used for both a
-     * lone word tapped in the verse text and a lone word tapped in the AI's own reply.
+     * A single word's pronunciation + dictionary-style definition + a short cross-language
+     * translation, grounded in the verse it appears in for the correct sense. The translation
+     * mirrors the "word · translation" pairing shown for scripture-word selections — so tapping
+     * a word anywhere in the AI window shows the same kind of dual-language label.
+     *
+     * [translationTargetLangName] is the language the translation should be written in (typically
+     * the opposite direction from [wordLanguageName]: if the word is Spanish, translate to
+     * English; if the word is English from a definition, translate back to Spanish).
      */
     suspend fun fetchWordInfo(
         apiKey: String,
         word: String,
         wordLanguageName: String,
         responseLanguageName: String,
+        translationTargetLangName: String,
         verseRef: String,
         verseContext: String,
-    ): Result<Pair<String, String>> {
+    ): Result<Triple<String, String, String?>> {
+        val translationLine = if (translationTargetLangName != wordLanguageName) {
+            "3. A short translation of \"$word\" from $wordLanguageName into $translationTargetLangName (1–4 words maximum)."
+        } else {
+            "3. Leave the \"translation\" field as an empty string."
+        }
         val systemInstruction = """
             The word "$word" appears in $wordLanguageName in this Bible verse ($verseRef): "$verseContext"
             Provide:
             1. A simple, easy-to-read phonetic pronunciation guide for "$word" (not IPA — spelled out for a learner, e.g. "boh-NEE-toh"). Keep this spelled-out guide itself readable regardless of language.
             2. A concise dictionary-style definition (one sentence) of "$word" as used in this context, written in $responseLanguageName.
-            Respond as JSON: {"pronunciation": "...", "definition": "..."}.
+            $translationLine
+            Respond as JSON: {"pronunciation": "...", "definition": "...", "translation": "..."}.
         """.trimIndent()
         return callGemini(apiKey, systemInstruction, emptyList(), "Look up this word.", responseSchema = WORD_INFO_RESPONSE_SCHEMA)
             .mapCatching { raw ->
                 val json = JSONObject(raw)
-                json.getString("pronunciation").trim() to json.getString("definition").trim()
+                val pronunciation = json.getString("pronunciation").trim()
+                val definition = json.getString("definition").trim()
+                val translation = json.optString("translation", "").trim()
+                    .takeIf { it.isNotEmpty() && !it.equals(word, ignoreCase = true) }
+                Triple(pronunciation, definition, translation)
             }
     }
 

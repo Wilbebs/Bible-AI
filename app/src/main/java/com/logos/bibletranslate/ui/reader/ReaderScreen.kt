@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -32,6 +33,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
@@ -43,7 +45,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -208,13 +209,16 @@ fun ReaderScreen(
             // a fixed shape for now — the scroll-triggered collapse into a floating pill
             // (corner radius/margin/padding animating together over 500ms ease-in-out) is
             // commented out below rather than deleted, in case it's wanted again later.
-            val outerMargin = 0.dp
-            val rowHorizontalPadding = 16.dp
-            val rowVerticalPadding = 12.dp
-            // Square across the top (flush with the very top of the screen), with the bottom
-            // corners diagonally cut rather than rounded — an angular, "drawer being pulled
-            // open" look instead of a soft pill edge.
-            val navBarShape = CutCornerShape(topStart = 0.dp, topEnd = 0.dp, bottomStart = 20.dp, bottomEnd = 20.dp)
+            // Floating-pill navbar: inset from the edges so the translucent bar reads as a
+            // distinct glass object hovering over the scripture, rather than a flush chrome bar.
+            // Shadow gives it lift; the large corner radius makes it feel lightweight. The pill
+            // shrinks slightly (narrower margins → wider pill) when the settings drawer is open
+            // so the expanded state looks intentional, not just taller.
+            val horizontalMargin = 10.dp
+            val verticalMargin = 6.dp
+            val rowHorizontalPadding = 14.dp
+            val rowVerticalPadding = 9.dp
+            val navBarShape = RoundedCornerShape(24.dp)
 
             // Drag-down handle: pulling the little chevron down reveals a settings drawer
             // beneath the main nav row, up to maxPanelHeight; releasing snaps it fully open
@@ -226,6 +230,13 @@ fun ReaderScreen(
             val maxPanelHeight = 76.dp
             val panelHeight = remember { Animatable(0.dp, Dp.VectorConverter) }
 
+            // Chevron rotates 180° when the settings drawer is open, giving a clear ↑/↓
+            // indicator without any extra text or separate toggle.
+            val chevronRotation by animateFloatAsState(
+                targetValue = if (panelHeight.value >= maxPanelHeight / 2f) 180f else 0f,
+                label = "chevronRotation",
+            )
+
             Box(
                 modifier = Modifier.fillMaxWidth(),
                 contentAlignment = Alignment.TopCenter,
@@ -233,13 +244,18 @@ fun ReaderScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = outerMargin, vertical = outerMargin)
-                        // No elevation shadow: the bar sits flush edge-to-edge (outerMargin is
-                        // 0), so there's no surrounding space for a real drop shadow to render
-                        // into — all it produced was a faint stray outline bleeding past the
-                        // clipped shape at the bottom corners, reading as a phantom second
-                        // layer/border. A flush, semi-transparent bar doesn't need one.
+                        .padding(horizontal = horizontalMargin, vertical = verticalMargin)
+                        // Shadow gives the floating pill its lift above the scripture text.
+                        // Must come before .clip() so it renders into the margin around the
+                        // pill rather than being clipped away.
+                        .shadow(elevation = 8.dp, shape = navBarShape)
                         .clip(navBarShape)
+                        // Subtle frosted-glass rim — catches light at the pill's edges the
+                        // same way real glass would.
+                        .border(
+                            BorderStroke(0.7.dp, Color.White.copy(alpha = if (Glass.isDarkMode) 0.13f else 0.40f)),
+                            navBarShape,
+                        )
                         .background(Glass.navBarBrush()),
                     contentAlignment = Alignment.TopCenter,
                 ) {
@@ -292,16 +308,15 @@ fun ReaderScreen(
                             )
                         }
 
-                        // Settings reveal, driven by dragging the chevron below. Height-driven
-                        // rather than AnimatedVisibility so it tracks the drag 1:1 while the
-                        // finger is down, and only springs on release. Deliberately small — one
-                        // row: a settings icon, two accent-color marbles, the (unselectable)
-                        // logo, two more marbles, and a bookmark icon — no scrolling content.
+                        // Settings reveal, driven by dragging or tapping the chevron below.
+                        // Height-driven rather than AnimatedVisibility so it tracks the drag
+                        // 1:1 while the finger is down, and only springs on release. Clipped
+                        // to the same rounded pill shape as the outer container.
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(panelHeight.value)
-                                .clip(CutCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp)),
+                                .clip(RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp)),
                             contentAlignment = Alignment.Center,
                         ) {
                             Row(
@@ -363,21 +378,26 @@ fun ReaderScreen(
                             }
                         }
 
-                        // Drag handle: a small chevron centered under the bar. Dragging it down
-                        // grows the settings drawer above 1:1 with the finger; letting go snaps
-                        // to fully open or fully closed depending on which side of the halfway
-                        // point the drawer was left on.
+                        // Drag/tap handle: chevron at the bottom of the pill. Drag it down to
+                        // reveal the settings drawer 1:1 with the finger; tap it to snap open
+                        // or closed; releasing a drag snaps to whichever half the drawer is on.
+                        // Chevron rotates 180° when the drawer is open (↓ → ↑).
                         Box(
                             modifier = Modifier.fillMaxWidth(),
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.KeyboardArrowDown,
-                                contentDescription = "Drag for more settings",
+                                contentDescription = if (panelHeight.value >= maxPanelHeight / 2f) "Close settings" else "Open settings",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier
                                     .padding(bottom = 4.dp)
                                     .size(20.dp)
+                                    .rotate(chevronRotation)
+                                    .clickable {
+                                        val target = if (panelHeight.value < maxPanelHeight / 2f) maxPanelHeight else 0.dp
+                                        coroutineScope.launch { panelHeight.animateTo(target, spring(dampingRatio = 0.8f)) }
+                                    }
                                     .pointerInput(Unit) {
                                         detectVerticalDragGestures(
                                             onVerticalDrag = { change, dragAmount ->
@@ -387,7 +407,7 @@ fun ReaderScreen(
                                                 coroutineScope.launch { panelHeight.snapTo(newHeight) }
                                             },
                                             onDragEnd = {
-                                                val target = if (panelHeight.value > maxPanelHeight / 2) maxPanelHeight else 0.dp
+                                                val target = if (panelHeight.value > maxPanelHeight / 2f) maxPanelHeight else 0.dp
                                                 coroutineScope.launch {
                                                     panelHeight.animateTo(target, spring(dampingRatio = 0.8f))
                                                 }

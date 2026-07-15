@@ -237,12 +237,15 @@ fun ChatBubble(
                 bubble.wordInfo?.let { info ->
                     WordInfoCard(
                         info = info,
-                        // Pair "word · translation" inline only when this card shows the very
-                        // word the bubble was opened on — a drill-down or response-word lookup
-                        // has its own word, whose translation this is not.
-                        translation = bubble.selectedSingleWord
-                            ?.takeIf { it == info.word && !bubble.initialIsLoading }
-                            ?.let { bubble.initialTranslation },
+                        // info.translation is now fetched alongside every word lookup, so all
+                        // tapped words (verse words, response words, definition drill-downs)
+                        // show the same "word · translation" pairing. Fall back to the
+                        // precomputed initialTranslation only for the originally selected verse
+                        // word where info.translation is absent (e.g. old cached state).
+                        translation = info.translation
+                            ?: bubble.selectedSingleWord
+                                ?.takeIf { it == info.word && !bubble.initialIsLoading }
+                                ?.let { bubble.initialTranslation },
                         onDefinitionWordTapped = onDefinitionWordTapped,
                     )
                 }

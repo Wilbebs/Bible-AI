@@ -26,12 +26,30 @@ class GeminiLiveTranslateClient {
         selectedText: String,
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val prompt = """
-                Bible verse context. Source ($sourceLangName): "$sourceVerseText"
-                Official $targetLangName translation of the same verse: "$targetVerseText"
-                What is the $targetLangName word or short phrase that "$selectedText" corresponds to in the official translation above, given this context?
-                Respond with ONLY the translated word or phrase, nothing else.
-            """.trimIndent()
+            // Use a full-passage translation prompt for multi-word selections (phrases or whole
+            // verses) so Gemini understands it must cover the entire input. The short "word or
+            // phrase" framing was confusing the model into returning just a few words even when
+            // an entire verse was selected, producing a truncated translation.
+            val wordCount = selectedText.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.size
+            val isMultiWord = wordCount > 4
+
+            val prompt = if (isMultiWord) {
+                """
+                    Translate the following $sourceLangName text into $targetLangName.
+                    Text to translate: "$selectedText"
+                    Verse context ($sourceLangName): "$sourceVerseText"
+                    Reference $targetLangName translation of the same verse: "$targetVerseText"
+                    Provide a COMPLETE translation that covers every word of the input — do not omit or summarise any part.
+                    Respond with ONLY the translated text, nothing else.
+                """.trimIndent()
+            } else {
+                """
+                    Bible verse context. Source ($sourceLangName): "$sourceVerseText"
+                    Official $targetLangName translation of the same verse: "$targetVerseText"
+                    What is the $targetLangName word or short phrase that "$selectedText" corresponds to in the official translation above, given this context?
+                    Respond with ONLY the translated word or phrase, nothing else.
+                """.trimIndent()
+            }
 
             val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$MODEL:generateContent?key=$apiKey")
             val connection = url.openConnection() as HttpURLConnection
@@ -70,6 +88,17 @@ class GeminiLiveTranslateClient {
                 .getJSONObject(0)
                 .getString("text")
                 .trim()
+
+            // Guard against Gemini still truncating on a multi-word selection: if the response
+            // looks implausibly short relative to what was asked for, fall back to the official
+            // target-verse text so the user sees something correct rather than a fragment.
+            if (isMultiWord && targetVerseText.isNotEmpty()) {
+                val resultWords = text.split(Regex("\\s+")).filter { it.isNotEmpty() }.size
+                val minExpected = (wordCount * 0.25).toInt().coerceAtLeast(3)
+                if (resultWords < minExpected) {
+                    return@withContext Result.success(targetVerseText)
+                }
+            }
 
             Result.success(text)
         } catch (e: Exception) {

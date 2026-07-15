@@ -39,11 +39,18 @@ private const val LAST_OT_BOOK_ID = 39
 /** ~200 tokens per the addendum's follow-up input cap, approximated as a word count. */
 private const val MAX_FOLLOWUP_WORDS = 150
 
-/** Single-word focus card: pronunciation + a real dictionary definition, not just the translation. */
+/** Single-word focus card: pronunciation + dictionary definition + an optional cross-language translation. */
 data class WordInfoState(
     val word: String,
     val pronunciation: String? = null,
     val definition: String? = null,
+    /**
+     * Short translation of [word] into the cross-language direction (e.g. Spanish→English or
+     * English→Spanish), fetched alongside the definition so every word lookup shows the same
+     * "word · translation" pairing as the initial scripture-word tap. Null if the lookup is
+     * still in flight, failed, or if both languages happen to be the same.
+     */
+    val translation: String? = null,
     val isLoading: Boolean = true,
 )
 
@@ -288,8 +295,9 @@ class ReaderViewModel(
             _uiState.value = state.copy(chatBubble = updatedBubble.copy(wordInfo = WordInfoState(word, isLoading = true)))
             // The word itself is in the reading language (state.language), but the pronunciation/
             // definition should print in whatever language is currently selected in the bubble's
-            // own dropdown, so it stays consistent with everything else in the bubble.
-            fetchWordInfoAsync(verse, word, state.language, bubble.bubbleTargetLanguage)
+            // own dropdown, so it stays consistent with everything else in the bubble. The
+            // translation target is bubbleTargetLanguage (Spanish word → English translation).
+            fetchWordInfoAsync(verse, word, state.language, bubble.bubbleTargetLanguage, bubble.bubbleTargetLanguage)
         } else {
             _uiState.value = state.copy(chatBubble = clearWordInfo(updatedBubble))
         }
@@ -327,9 +335,11 @@ class ReaderViewModel(
         if (newQueue.size == 1) {
             val verse = state.verses.firstOrNull { it.numericVerseId == bubble.verseId }
             if (verse != null) {
-                // Same immediate-loading treatment as a verse-text tap (§3).
+                // Same immediate-loading treatment as a verse-text tap (§3). The word is in the
+                // target language; translate it back to the source (scripture) language for the
+                // "word · translation" pairing shown in the card.
                 _uiState.value = state.copy(chatBubble = updatedBubble.copy(wordInfo = WordInfoState(newQueue.first(), isLoading = true)))
-                fetchWordInfoAsync(verse, newQueue.first(), bubble.bubbleTargetLanguage, bubble.bubbleTargetLanguage)
+                fetchWordInfoAsync(verse, newQueue.first(), bubble.bubbleTargetLanguage, bubble.bubbleTargetLanguage, state.language)
             } else {
                 _uiState.value = state.copy(chatBubble = updatedBubble)
             }
@@ -355,7 +365,10 @@ class ReaderViewModel(
         val cleaned = word.trim { it.isWhitespace() || it in ",.;:!?\"'“”¡¿()" }
         if (cleaned.isEmpty()) return
         _uiState.value = state.copy(chatBubble = bubble.copy(wordInfo = WordInfoState(cleaned, isLoading = true)))
-        fetchWordInfoAsync(verse, cleaned, bubble.bubbleTargetLanguage, bubble.bubbleTargetLanguage)
+        // The definition word is in the target language; translate it back to the source
+        // language so the card shows the same cross-language "word · translation" pair as
+        // a direct scripture-word tap does.
+        fetchWordInfoAsync(verse, cleaned, bubble.bubbleTargetLanguage, bubble.bubbleTargetLanguage, state.language)
     }
 
     /**
@@ -371,7 +384,7 @@ class ReaderViewModel(
         _uiState.value = state.copy(
             chatBubble = bubble.copy(isCondensed = false, wordInfo = WordInfoState(word, isLoading = true)),
         )
-        fetchWordInfoAsync(verse, word, state.language, bubble.bubbleTargetLanguage)
+        fetchWordInfoAsync(verse, word, state.language, bubble.bubbleTargetLanguage, bubble.bubbleTargetLanguage)
     }
 
     /** Explicit "X" — fully closes the bubble (addendum §6). */
@@ -674,8 +687,17 @@ class ReaderViewModel(
      * up…" state is visible immediately — this just resolves it once the network call returns.
      * Silently leaves it at "no definition" without a Gemini key — the rest of the bubble still
      * works.
+     *
+     * [translationTargetLang] is the language the translation field should be rendered in — the
+     * cross direction from [wordLanguage] so the card shows "word · translation" in two languages.
      */
-    private fun fetchWordInfoAsync(verse: VerseData, word: String, wordLanguage: BibleLanguage, responseLanguage: BibleLanguage) {
+    private fun fetchWordInfoAsync(
+        verse: VerseData,
+        word: String,
+        wordLanguage: BibleLanguage,
+        responseLanguage: BibleLanguage,
+        translationTargetLang: BibleLanguage,
+    ) {
         val myId = ++wordInfoRequestId
         val apiKey = ApiKeys.geminiApiKey
         if (apiKey == null) {
@@ -685,13 +707,16 @@ class ReaderViewModel(
         }
         val verseRef = "${verse.bookName} ${verse.chapter}:${verse.verse}"
         viewModelScope.launch {
-            val result = verseChatClient.fetchWordInfo(apiKey, word, wordLanguage.displayName, responseLanguage.displayName, verseRef, verse.text)
+            val result = verseChatClient.fetchWordInfo(
+                apiKey, word, wordLanguage.displayName, responseLanguage.displayName,
+                translationTargetLang.displayName, verseRef, verse.text,
+            )
             if (myId != wordInfoRequestId) return@launch
             val current = _uiState.value.chatBubble ?: return@launch
             _uiState.value = _uiState.value.copy(
                 chatBubble = result.fold(
-                    onSuccess = { (pronunciation, definition) ->
-                        current.copy(wordInfo = WordInfoState(word, pronunciation, definition, isLoading = false))
+                    onSuccess = { (pronunciation, definition, translation) ->
+                        current.copy(wordInfo = WordInfoState(word, pronunciation, definition, translation, isLoading = false))
                     },
                     onFailure = { current.copy(wordInfo = WordInfoState(word, isLoading = false)) },
                 ),
