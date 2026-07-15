@@ -82,15 +82,26 @@ object Glass {
     val deepBlue: Color get() = accentColors.last()
 
     /**
-     * Glow palette for the follow-up input's pulse ring — always resolved to 3 stops so the
-     * ring animation stays consistent regardless of whether the selected theme has 2 or 3
-     * tones: two-tone themes repeat their first color at the end, matching the original
-     * "mostly-dominant-tone, dip into the minority tone" motion.
+     * Glow palette for the follow-up input's pulse ring. This feeds a *sweep* (circular)
+     * gradient, which wraps its last stop back into its first at the 0°/360° seam — so for a
+     * 3-tone theme, naively using the 3 colors as-is (sky, blue, purple) put sky and purple
+     * directly adjacent at that seam with no blue between them. Mirrored out to sky→blue→
+     * purple→blue→sky instead: five stops, first and last both the dominant tone, so the seam
+     * is a smooth same-color wrap and sky/purple are never adjacent anywhere around the ring.
+     * Two-tone themes already repeat their first color at the end for the same reason.
      */
-    val heavenColors: List<Color> get() = if (accentColors.size >= 3) accentColors else listOf(accentColors[0], accentColors[1], accentColors[0])
+    val heavenColors: List<Color>
+        get() = when (accentColors.size) {
+            3 -> listOf(accentColors[0], accentColors[1], accentColors[2], accentColors[1], accentColors[0])
+            else -> listOf(accentColors[0], accentColors[1], accentColors[0])
+        }
 
-    /** Stop positions paired with [heavenColors] — 0 → 0.65 → 1.0, giving the dominant tone the majority presence. */
-    val heavenStops = floatArrayOf(0f, 0.65f, 1f)
+    /** Stop positions paired with [heavenColors] — mirrored around the midpoint to match. */
+    val heavenStops: FloatArray get() = if (heavenColors.size == 5) {
+        floatArrayOf(0f, 0.325f, 0.5f, 0.675f, 1f)
+    } else {
+        floatArrayOf(0f, 0.65f, 1f)
+    }
 
     val panelShape = RoundedCornerShape(28.dp)
     val pillShape = RoundedCornerShape(50)

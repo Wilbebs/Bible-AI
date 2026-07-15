@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Delete
@@ -58,7 +57,6 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -276,15 +274,16 @@ fun ChatBubble(
                             CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                             Spacer(Modifier.width(8.dp))
                         }
-                        SelectionContainer {
-                            TappableWords(
-                                text = bubble.initialTranslation,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                onWordTapped = onResponseWordTapped,
-                                animate = !bubble.initialIsLoading,
-                            )
-                        }
+                        // No SelectionContainer here — clipboard text-selection is deliberately
+                        // disabled throughout the AI window; the only "selection" gesture on
+                        // this text is tapping an individual word to look it up.
+                        TappableWords(
+                            text = bubble.initialTranslation,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            onWordTapped = onResponseWordTapped,
+                            animate = !bubble.initialIsLoading,
+                        )
                     }
                 }
 
@@ -389,13 +388,27 @@ fun ChatBubble(
                                 )
                             },
                             leadingIcon = { Sparkle(size = 14.dp) },
-                            trailingIcon = if (inputValue.text.isBlank()) {
-                                {
-                                    IconButton(onClick = { onChipTapped(currentSuggestion) }) {
-                                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Ask: $currentSuggestion")
-                                    }
+                            // The arrow is now the *only* send affordance — no separate Send
+                            // button alongside the field. Blank field: taps the currently
+                            // shown suggestion (unchanged). Non-blank: sends what's typed,
+                            // replacing the old dedicated button 1:1.
+                            trailingIcon = {
+                                val canSend = inputValue.text.isNotBlank() && !bubble.isSendingFollowUp
+                                IconButton(
+                                    onClick = { if (inputValue.text.isBlank()) onChipTapped(currentSuggestion) else onSend() },
+                                    enabled = inputValue.text.isBlank() || canSend,
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowForward,
+                                        contentDescription = if (inputValue.text.isBlank()) "Ask: $currentSuggestion" else "Send",
+                                        tint = if (inputValue.text.isBlank() || canSend) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                        },
+                                    )
                                 }
-                            } else null,
+                            },
                             modifier = Modifier
                                 .weight(1f)
                                 .clip(Glass.pillShape)
@@ -426,20 +439,6 @@ fun ChatBubble(
                                 },
                             ),
                         )
-                        Spacer(Modifier.width(4.dp))
-                        TextButton(
-                            onClick = onSend,
-                            enabled = !bubble.isSendingFollowUp && bubble.followUpInput.isNotBlank(),
-                            colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
-                            modifier = Modifier
-                                .clip(Glass.pillShape)
-                                .background(Glass.buttonBrush(), Glass.pillShape),
-                        ) {
-                            // Explicit white, rather than relying on the inherited button
-                            // content color, since that wasn't reliably showing up against the
-                            // sky-blue → deep-blue gradient fill.
-                            Text("Send", color = Color.White)
-                        }
                     }
                 }
             }
@@ -483,14 +482,12 @@ private fun ChatMessageRow(message: ChatMessage, onResponseWordTapped: (String) 
     Column(Modifier.padding(vertical = 4.dp)) {
         Text(label, style = MaterialTheme.typography.labelSmall, fontStyle = FontStyle.Italic)
         if (message.role == ChatRole.ASSISTANT && !message.isError) {
-            SelectionContainer {
-                TappableWords(
-                    text = message.text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    onWordTapped = onResponseWordTapped,
-                    animate = true,
-                )
-            }
+            TappableWords(
+                text = message.text,
+                style = MaterialTheme.typography.bodyMedium,
+                onWordTapped = onResponseWordTapped,
+                animate = true,
+            )
         } else if (message.isError) {
             // Failed responses are plain, non-tappable text (not treated as
             // AI-generated content to tap into a definition lookup) so a
@@ -534,11 +531,13 @@ private fun TappableWords(
     )
     FlowRow(modifier = modifier) {
         tokens.take(visibleCount).forEach { word ->
+            // No underline — every word here is already tappable by design (that's the whole
+            // point of this composable), so decorating them as if they were links/definitions
+            // added visual noise across the entire response instead of only where it matters.
             Text(
                 text = "$word ",
                 style = style,
                 fontWeight = fontWeight,
-                textDecoration = TextDecoration.Underline,
                 modifier = Modifier.clickable { onWordTapped(word) },
             )
         }
@@ -587,24 +586,20 @@ private fun WordInfoCard(info: WordInfoState, translation: String?, onDefinition
                 Text("Looking up pronunciation and definition…", style = MaterialTheme.typography.bodySmall, fontStyle = FontStyle.Italic)
             }
         } else {
-            // Wrapped in a SelectionContainer so the pronunciation/definition can be
-            // copied like normal text, while the definition's own words stay individually
-            // tappable (same as the rest of the bubble's response text) — selection and
-            // per-word tap-to-look-up aren't mutually exclusive gestures in Compose.
-            SelectionContainer {
-                Column {
-                    info.pronunciation?.let {
-                        Text("/$it/", style = MaterialTheme.typography.bodySmall, fontStyle = FontStyle.Italic, modifier = Modifier.padding(top = 2.dp))
-                    }
-                    info.definition?.let {
-                        TappableWords(
-                            text = it,
-                            style = MaterialTheme.typography.bodyMedium,
-                            onWordTapped = onDefinitionWordTapped,
-                            animate = true,
-                            modifier = Modifier.padding(top = 2.dp),
-                        )
-                    }
+            // No SelectionContainer — clipboard text-selection is disabled here too; the
+            // definition's words stay individually tappable for the drill-down lookup instead.
+            Column {
+                info.pronunciation?.let {
+                    Text("/$it/", style = MaterialTheme.typography.bodySmall, fontStyle = FontStyle.Italic, modifier = Modifier.padding(top = 2.dp))
+                }
+                info.definition?.let {
+                    TappableWords(
+                        text = it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        onWordTapped = onDefinitionWordTapped,
+                        animate = true,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
                 }
             }
         }

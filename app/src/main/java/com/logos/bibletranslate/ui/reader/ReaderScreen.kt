@@ -3,12 +3,14 @@ package com.logos.bibletranslate.ui.reader
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -28,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -49,9 +52,11 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.Image
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -141,16 +146,11 @@ fun ReaderScreen(
         viewModel.clearHighlightedVerse()
     }
 
-    // The study bubble panel floats over the bottom ~40-70% of the screen, so the verse it's
-    // attached to must never end up rendered underneath it. Scrolling that verse to the very
-    // top of the list whenever a *new* bubble opens (keyed only on which verse — not on every
-    // bubble state update, e.g. follow-up typing) guarantees it stays fully visible above the
-    // panel, regardless of where it happened to be on screen when tapped.
-    LaunchedEffect(uiState.chatBubble?.verseId) {
-        val verseId = uiState.chatBubble?.verseId ?: return@LaunchedEffect
-        val index = uiState.verses.indexOfFirst { it.numericVerseId == verseId }
-        if (index >= 0) listState.animateScrollToItem(index)
-    }
+    // Deliberately *no* auto-scroll-to-verse when a bubble opens: an animated scroll right as
+    // a hold-to-select/drag gesture completes moved the scripture out from under the finger
+    // still on screen, so a drag-to-select felt like it lost tracking mid-gesture. The panel
+    // floats over the bottom of the screen regardless of where the verse lands, and the user
+    // can still scroll manually (that background scrolling is untouched) if it ends up hidden.
 
     // Continuous cross-chapter scroll (§ pagination): watched off the same listState the
     // LazyColumn uses, so both loading-more-at-the-edge and the "which chapter is on screen
@@ -311,18 +311,37 @@ fun ReaderScreen(
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                // Doubles as the only settings toggle for now: tapping it
-                                // flips dark mode, and its own icon swaps to reflect the
-                                // current state (gear → moon) so the toggle is visible without
-                                // adding a separate row.
-                                Icon(
-                                    imageVector = if (Glass.isDarkMode) Icons.Filled.DarkMode else Icons.Filled.Settings,
-                                    contentDescription = "Toggle dark mode",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier
-                                        .size(20.dp)
-                                        .clickable { Glass.toggleDarkMode() },
-                                )
+                                // The gear now opens an actual settings menu (currently just
+                                // the light/dark toggle, with room to grow) instead of being
+                                // the toggle itself.
+                                var showSettingsMenu by remember { mutableStateOf(false) }
+                                Box {
+                                    Icon(
+                                        imageVector = Icons.Filled.Settings,
+                                        contentDescription = "App settings",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clickable { showSettingsMenu = true },
+                                    )
+                                    DropdownMenu(
+                                        expanded = showSettingsMenu,
+                                        onDismissRequest = { showSettingsMenu = false },
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Text("Appearance", style = MaterialTheme.typography.bodyMedium)
+                                            Spacer(Modifier.width(4.dp))
+                                            DarkModeToggleSwitch(
+                                                isDarkMode = Glass.isDarkMode,
+                                                onToggle = { Glass.toggleDarkMode() },
+                                            )
+                                        }
+                                    }
+                                }
                                 AccentMarble(theme = AccentTheme.SkyDeep)
                                 AccentMarble(theme = AccentTheme.SkyDeepPurple)
                                 // The Jesus-with-people logo — enlarged further so it reads
@@ -645,6 +664,63 @@ private fun AccentMarble(theme: AccentTheme, size: Dp = 22.dp) {
             )
             .clickable { Glass.selectAccentTheme(theme) },
     )
+}
+
+/**
+ * Apple-style light/dark toggle: a pill track with a sliding thumb, a sun glyph on the light
+ * side and a moon on the dark side. Whichever side is active "lights up" (sun turns bright
+ * yellow when in light mode, moon turns a cool blue-white when in dark mode) while the inactive
+ * glyph stays dim — the toggle reads its own state at a glance instead of needing a label.
+ */
+@Composable
+private fun DarkModeToggleSwitch(isDarkMode: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+    val trackWidth = 52.dp
+    val trackHeight = 28.dp
+    val thumbSize = 22.dp
+    val thumbInset = 3.dp
+    val thumbOffset by animateDpAsState(
+        targetValue = if (isDarkMode) trackWidth - thumbSize - thumbInset else thumbInset,
+        label = "themeToggleThumb",
+    )
+    Box(
+        modifier = modifier
+            .width(trackWidth)
+            .height(trackHeight)
+            .clip(RoundedCornerShape(50))
+            .background(if (isDarkMode) Color(0xFF161A33) else Color(0xFFBFE3FA))
+            .clickable { onToggle() },
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(trackHeight)
+                .padding(horizontal = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.LightMode,
+                contentDescription = null,
+                tint = if (!isDarkMode) Color(0xFFFFC107) else Color.White.copy(alpha = 0.3f),
+                modifier = Modifier.size(14.dp),
+            )
+            Icon(
+                imageVector = Icons.Filled.Bedtime,
+                contentDescription = null,
+                tint = if (isDarkMode) Color(0xFFE3E9FF) else Color.Black.copy(alpha = 0.2f),
+                modifier = Modifier.size(14.dp),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .padding(top = thumbInset)
+                .offset(x = thumbOffset)
+                .size(thumbSize)
+                .clip(CircleShape)
+                .background(Color.White)
+                .shadow(1.dp, CircleShape),
+        )
+    }
 }
 
 /**

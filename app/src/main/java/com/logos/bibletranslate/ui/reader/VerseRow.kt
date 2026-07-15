@@ -39,13 +39,12 @@ import com.logos.bibletranslate.data.VerseData
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * How long a finger must stay put on a word before a hold turns into a selection. Long enough
- * that a natural "press and immediately drag" gesture (intending to scroll, or to drag-select
- * starting the instant the finger lands) reliably loses the race to the touch-slop check below
- * instead of occasionally winning it and firing a single-word selection first — 350ms cut it too
- * close for that; a full 750ms makes "this is a deliberate hold" unambiguous.
+ * How long a finger must stay put on a word before a hold turns into a selection. 750ms made
+ * "this is a deliberate hold" unambiguous but felt sluggish in practice — cut back by about a
+ * third to 450ms, which is still comfortably past the touch-slop race window from a scroll
+ * flick's initial touch, but responds quickly enough that hold-then-drag-to-select feels snappy.
  */
-private const val HOLD_TO_SELECT_MILLIS = 750L
+private const val HOLD_TO_SELECT_MILLIS = 450L
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
