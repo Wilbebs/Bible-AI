@@ -148,9 +148,15 @@ object Glass {
      * reads as glass rather than a solid bar.
      */
     fun navBarBrush(): Brush {
+        // iOS 27 liquid-glass feel: more translucent than before, with a gentle
+        // vertical gradient so the pill reads as a physical object (slightly lighter
+        // at the top where light hits first) rather than a flat painted surface.
         val base = if (isDarkMode) Color(0xFF10122A) else Color.White
-        return Brush.linearGradient(
-            colors = listOf(base.copy(alpha = 0.94f), base.copy(alpha = 0.94f)),
+        return Brush.verticalGradient(
+            colors = listOf(
+                base.copy(alpha = if (isDarkMode) 0.76f else 0.78f),
+                base.copy(alpha = if (isDarkMode) 0.82f else 0.87f),
+            ),
         )
     }
 }

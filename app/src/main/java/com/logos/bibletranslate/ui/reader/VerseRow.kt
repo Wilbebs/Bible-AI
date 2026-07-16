@@ -56,7 +56,6 @@ fun VerseRow(
     onSelectionStart: (Int) -> Unit,
     onSelectionExtend: (Int) -> Unit,
     onWordToggle: (Int) -> Unit,
-    onTranslateVerse: () -> Unit,
     modifier: Modifier = Modifier,
     /** Set for a verse search's landing verse — drives the slow sky-blue/dark-blue pulse across every word. */
     isHighlighted: Boolean = false,
@@ -102,9 +101,7 @@ fun VerseRow(
             text = "${verse.verse}",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier
-                .padding(top = 7.dp, end = 3.dp)
-                .clickable(onClick = onTranslateVerse),
+            modifier = Modifier.padding(top = 7.dp, end = 3.dp),
         )
         FlowRow(
             modifier = Modifier

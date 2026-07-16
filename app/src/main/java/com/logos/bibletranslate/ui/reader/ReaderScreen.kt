@@ -259,34 +259,52 @@ fun ReaderScreen(
                         .background(Glass.navBarBrush()),
                     contentAlignment = Alignment.TopCenter,
                 ) {
+                    // Specular highlight — a thin band of white light at the very top of
+                    // the pill, the iOS 27 "liquid glass" rim. Layered behind the Column
+                    // so controls render on top; appears even when the drawer is collapsed.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(22.dp)
+                            .align(Alignment.TopCenter)
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        Color.White.copy(alpha = if (Glass.isDarkMode) 0.10f else 0.32f),
+                                        Color.Transparent,
+                                    ),
+                                ),
+                            ),
+                    )
+
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        // Search-bar/nav-pill row height — the controls are vertically balanced
-                        // against this shared height.
-                        val navRowHeight = 32.dp
+                        // All three controls sit in a single Row and size to their own content.
+                        // No fixed height on individual controls — vertical alignment comes from
+                        // the Row (CenterVertically), which naturally aligns mismatched-height
+                        // pills without requiring explicit height constraints on each child.
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .windowInsetsPadding(WindowInsets.statusBars)
                                 .padding(horizontal = rowHorizontalPadding, vertical = rowVerticalPadding),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            // Single fluid book→chapter entry point (replaces the separate "Ch."
-                            // button — chapter navigation now lives inside the same picker).
-                            // Sized to its own content (capped so a long book name can't crowd
-                            // out the language pill next to it) rather than stretched to fill
-                            // the whole left cluster — the two pills sitting snug against each
-                            // other, both hugging the left edge, reads far more deliberate than
-                            // one control ballooning to eat all the leftover space.
-                            TextButton(
-                                onClick = { showBookChapterPicker = true },
+                            // Book/chapter: frosted-glass pill, no visible border — the iOS 27
+                            // approach where controls look pressed into the glass surface rather
+                            // than layered on top of it. Box+clickable instead of TextButton
+                            // so we fully own the background and shape without fighting Material.
+                            Box(
                                 modifier = Modifier
-                                    .height(navRowHeight)
-                                    .widthIn(max = 132.dp)
+                                    .widthIn(max = 128.dp)
                                     .clip(RoundedCornerShape(50))
-                                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), RoundedCornerShape(50))
-                                    .border(BorderStroke(1.dp, Glass.buttonBrush()), RoundedCornerShape(50)),
-                                contentPadding = PaddingValues(horizontal = 10.dp),
+                                    .background(
+                                        if (Glass.isDarkMode) Color.White.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.62f),
+                                        RoundedCornerShape(50),
+                                    )
+                                    .clickable { showBookChapterPicker = true }
+                                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                                contentAlignment = Alignment.Center,
                             ) {
                                 Text(
                                     "$displayedBookName $displayedChapter ▾",
@@ -295,16 +313,19 @@ fun ReaderScreen(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             }
+                            // Language picker: same liquid-glass treatment but tinted sky-blue.
                             CompactReadingLanguagePicker(
                                 selected = uiState.language,
                                 options = BibleLanguage.entries,
                                 onSelected = viewModel::onLanguageSelected,
-                                modifier = Modifier.height(navRowHeight),
                             )
+                            // Search field fills the remaining horizontal space — the pill
+                            // stretches edge-to-edge inside the row rather than being a fixed
+                            // narrow widget. Looks intentional rather than squished.
                             VerseSearchBar(
                                 books = uiState.books,
                                 onSubmit = viewModel::onVerseSearchSubmitted,
-                                modifier = Modifier.height(navRowHeight),
+                                modifier = Modifier.weight(1f),
                             )
                         }
 
@@ -461,7 +482,6 @@ fun ReaderScreen(
                     onSelectionStart = viewModel::onSelectionStart,
                     onSelectionExtend = viewModel::onSelectionExtend,
                     onWordToggle = viewModel::onVerseWordTapped,
-                    onTranslateVerse = viewModel::onTranslateVerseRequested,
                     onGestureDown = viewModel::onVerseGestureDown,
                     onVerseLocked = viewModel::lockVerse,
                 )
@@ -501,7 +521,10 @@ fun ReaderScreen(
                         onChipTapped = viewModel::onChipTapped,
                         onResponseWordTapped = viewModel::onResponseWordTapped,
                         onDefinitionWordTapped = viewModel::onDefinitionWordTapped,
-                        modifier = Modifier.fillMaxSize(),
+                        // Pad the top so the bubble's BoxWithConstraints receives the correct
+                    // available height — without this the 70% cap is computed against the
+                    // full screen and the panel can slide up behind the floating navbar.
+                    modifier = Modifier.fillMaxSize().padding(top = padding.calculateTopPadding()),
                     )
                 }
             }
@@ -519,9 +542,6 @@ fun ReaderScreen(
             )
         }
 
-        uiState.verseDialog?.let { data ->
-            VerseTranslateDialog(data = data, onDismiss = viewModel::dismissVerseDialog)
-        }
     }
 }
 
@@ -533,7 +553,6 @@ private fun VerseList(
     onSelectionStart: (Long, Int) -> Unit,
     onSelectionExtend: (Long, Int) -> Unit,
     onWordToggle: (Long, Int) -> Unit,
-    onTranslateVerse: (VerseData) -> Unit,
     onGestureDown: (Long) -> Unit,
     onVerseLocked: (Long) -> Unit,
     modifier: Modifier = Modifier,
@@ -575,7 +594,6 @@ private fun VerseList(
                     onSelectionStart = { wordIndex -> onSelectionStart(verse.numericVerseId, wordIndex) },
                     onSelectionExtend = { wordIndex -> onSelectionExtend(verse.numericVerseId, wordIndex) },
                     onWordToggle = { wordIndex -> onWordToggle(verse.numericVerseId, wordIndex) },
-                    onTranslateVerse = { onTranslateVerse(verse) },
                     isHighlighted = uiState.highlightedVerseId == verse.numericVerseId,
                     isLocked = uiState.lockedVerseId == verse.numericVerseId,
                     onGestureDown = { onGestureDown(verse.numericVerseId) },
@@ -758,48 +776,54 @@ private fun VerseSearchBar(
     var expanded by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
 
-    Box(modifier, contentAlignment = Alignment.CenterStart) {
-        Surface(
-            shape = RoundedCornerShape(50),
-            color = MaterialTheme.colorScheme.primaryContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Search,
-                    contentDescription = null,
-                    tint = Color.Black,
-                    modifier = Modifier.size(14.dp),
+    // Fills whatever horizontal space the parent Row assigns (weight(1f) from call site).
+    // No separate border — the frosted fill is the only visual boundary, matching the
+    // other controls' liquid-glass look. Text field stretches to full pill width.
+    Box(modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+        val fieldTextColor = if (Glass.isDarkMode) Color.White.copy(alpha = 0.90f)
+                             else MaterialTheme.colorScheme.onSurface
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(50))
+                .background(
+                    if (Glass.isDarkMode) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.62f),
+                    RoundedCornerShape(50),
                 )
-                Spacer(Modifier.width(4.dp))
-                Box(Modifier.width(84.dp)) {
-                    if (query.isEmpty()) {
-                        Text(
-                            "Jn 3:16",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f),
-                        )
-                    }
-                    BasicTextField(
-                        value = query,
-                        onValueChange = { text ->
-                            query = text
-                            expanded = verseSearchBookSuggestions(text, books).isNotEmpty()
-                        },
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.labelSmall.copy(color = MaterialTheme.colorScheme.onPrimaryContainer),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = {
-                            expanded = false
-                            onSubmit(query)
-                            focusManager.clearFocus()
-                        }),
-                        modifier = Modifier.fillMaxWidth(),
+                .padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Search,
+                contentDescription = null,
+                tint = if (Glass.isDarkMode) Color.White.copy(alpha = 0.6f) else Color.Black.copy(alpha = 0.5f),
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(5.dp))
+            Box(Modifier.weight(1f)) {
+                if (query.isEmpty()) {
+                    Text(
+                        "Jn 3:16",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = fieldTextColor.copy(alpha = 0.45f),
                     )
                 }
+                BasicTextField(
+                    value = query,
+                    onValueChange = { text ->
+                        query = text
+                        expanded = verseSearchBookSuggestions(text, books).isNotEmpty()
+                    },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.labelSmall.copy(color = fieldTextColor),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = {
+                        expanded = false
+                        onSubmit(query)
+                        focusManager.clearFocus()
+                    }),
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
         val suggestions = verseSearchBookSuggestions(query, books)
@@ -832,16 +856,15 @@ private fun CompactReadingLanguagePicker(
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    // Liquid-glass tinted pill: skyBlue at reduced opacity so the glass background
+    // shows through, consistent with the frosted feel of the other controls.
     Box(modifier) {
         Row(
             modifier = Modifier
-                .fillMaxHeight()
                 .clip(RoundedCornerShape(50))
-                // Solid light-blue fill — no gradient — so it reads as one flat pill against
-                // the frosted (translucent) nav bar behind it.
-                .background(Glass.skyBlue, RoundedCornerShape(50))
+                .background(Glass.skyBlue.copy(alpha = 0.82f), RoundedCornerShape(50))
                 .clickable { expanded = true }
-                .padding(horizontal = 10.dp),
+                .padding(horizontal = 10.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
