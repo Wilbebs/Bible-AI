@@ -277,10 +277,19 @@ class ReaderViewModel(
         val tokens = VerseTokenizer.tokenize(verse.text)
         if (wordIndex !in tokens.indices) return
 
-        val newQueue = if (wordIndex in bubble.queuedWordIndices) {
-            bubble.queuedWordIndices - wordIndex
-        } else {
-            bubble.queuedWordIndices + wordIndex
+        // Word-tap behaviour:
+        //  • Tap the currently shown single word   → deselect (toggle off)
+        //  • Tap a DIFFERENT word while exactly 1 is defined → replace the selection
+        //    (so the new word's definition loads rather than building a 2-word autofill
+        //     question — the confusing "pie gives eat's definition" loop fixed here)
+        //  • Tap any word in a multi-word selection → normal toggle
+        val onlyCurrentWord = bubble.queuedWordIndices.singleOrNull()
+        val newQueue = when {
+            wordIndex == onlyCurrentWord -> bubble.queuedWordIndices - wordIndex  // deselect
+            onlyCurrentWord != null && bubble.wordInfo != null ->
+                listOf(wordIndex)  // replace: show new word's definition
+            wordIndex in bubble.queuedWordIndices -> bubble.queuedWordIndices - wordIndex
+            else -> bubble.queuedWordIndices + wordIndex
         }
         val questionText = buildAutofillQuestion(newQueue.map { tokens[it] })
         val updatedBubble = bubble.copy(

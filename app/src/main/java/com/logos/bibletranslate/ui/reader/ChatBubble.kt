@@ -28,6 +28,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Delete
@@ -149,6 +150,7 @@ fun ChatBubble(
     onClose: () -> Unit,
     onStartOver: () -> Unit,
     onExpand: () -> Unit,
+    onMinimize: () -> Unit = {},
     onDefine: () -> Unit,
     onLanguageChanged: (BibleLanguage) -> Unit,
     onInputChanged: (String) -> Unit,
@@ -170,8 +172,22 @@ fun ChatBubble(
         // User-controlled height fraction: starts at 70 % of available screen, drag the handle
         // up to expand, down to condense (min 15 % so at least one message stays visible).
         var userHeightFraction by remember { mutableFloatStateOf(0.70f) }
-        val availableHeight = maxHeight   // captured so it's accessible inside pointerInput lambdas
+        val availableHeight = maxHeight
         val maxMessageListHeight = availableHeight * userHeightFraction
+
+        // Reset fraction to comfortable reading height whenever the panel is re-expanded.
+        LaunchedEffect(bubble.isMinimized) {
+            if (!bubble.isMinimized) userHeightFraction = 0.70f
+        }
+
+        // Always scroll the message list to the bottom so the most recent exchange
+        // is visible when the panel is condensed by the drag handle.
+        val msgListState = rememberLazyListState()
+        LaunchedEffect(bubble.messages.size) {
+            if (bubble.messages.isNotEmpty()) {
+                msgListState.animateScrollToItem(bubble.messages.lastIndex + if (bubble.isSendingFollowUp) 1 else 0)
+            }
+        }
 
         // A frosted "pane of glass" floating over the reader: a translucent
         // gradient fill plus a bright rim-light border and soft shadow, in
@@ -229,8 +245,10 @@ fun ChatBubble(
                                     // Dragging up (negative dragAmount) increases the fraction;
                                     // dragging down shrinks it. Clamped to [0.15, 0.80].
                                     val deltaFrac = -(deltaDp.value / availableHeight.value)
-                                    userHeightFraction = (userHeightFraction + deltaFrac)
-                                        .coerceIn(0.15f, 0.80f)
+                                    val newFrac = (userHeightFraction + deltaFrac).coerceIn(0.15f, 0.80f)
+                                    userHeightFraction = newFrac
+                                    // Drag far enough down → fully minimize to just the translation text.
+                                    if (newFrac <= 0.22f) onMinimize()
                                 }
                             },
                         contentAlignment = Alignment.Center,
@@ -333,6 +351,7 @@ fun ChatBubble(
 
                 if (hasConversation || bubble.isSendingFollowUp) {
                     LazyColumn(
+                        state = msgListState,
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(max = maxMessageListHeight)

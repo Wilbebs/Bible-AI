@@ -585,6 +585,7 @@ fun ReaderScreen(
                         onClose = viewModel::onCloseBubble,
                         onStartOver = viewModel::onStartOver,
                         onExpand = viewModel::onExpandBubble,
+                        onMinimize = viewModel::onBubbleOutsideTap,
                         onDefine = viewModel::onDefineWord,
                         onLanguageChanged = viewModel::onBubbleLanguageChanged,
                         onInputChanged = viewModel::onFollowUpInputChanged,
@@ -852,12 +853,9 @@ private fun VerseSearchBar(
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var hasFocus by remember { mutableStateOf(false) }
-    // When a book suggestion is tapped we set this to suppress the dropdown
-    // until the user starts typing again (prevents the crash from the dropdown
-    // re-opening immediately after the suggestion onClick fires).
-    var suggestionJustSelected by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
+    val coroutineScope = rememberCoroutineScope()
     val isDark = Glass.isDarkMode
     val fieldTextColor = if (isDark) Color.White.copy(alpha = 0.90f)
                          else MaterialTheme.colorScheme.onSurface
@@ -866,27 +864,28 @@ private fun VerseSearchBar(
     val trimmed = query.trim()
     val parsed = remember(trimmed) { parseVerseSearchQuery(trimmed) }
 
-    // Book suggestions: only while still in the book-name phase.
-    val bookSuggestions: List<BookInfo> = remember(parsed, books, suggestionJustSelected) {
-        if (suggestionJustSelected || parsed.chapterFrag != null || parsed.bookFrag.isEmpty()) emptyList()
-        else books.filter { it.bookName.startsWith(parsed.bookFrag, ignoreCase = true) }
-                  .sortedBy { it.bookName }
-                  .take(7)
+    // Book suggestions — shown while still typing the book name.
+    // Natural suppression: once query ends with a space AND the book fragment is an
+    // exact book match (user just tapped a suggestion or finished typing the name),
+    // the dropdown disappears immediately without any guard state, so the user can
+    // freely backspace or type a chapter number without the bar locking up.
+    val bookSuggestions: List<BookInfo> = remember(query, parsed, books) {
+        if (parsed.chapterFrag != null || parsed.bookFrag.isEmpty()) return@remember emptyList()
+        if (query.endsWith(" ") && books.any { it.bookName.equals(parsed.bookFrag, ignoreCase = true) })
+            return@remember emptyList()
+        books.filter { it.bookName.startsWith(parsed.bookFrag, ignoreCase = true) }
+             .sortedBy { it.bookName }
+             .take(7)
     }
 
-    // Reset the "just selected" guard whenever the user types again.
-    LaunchedEffect(trimmed) {
-        if (suggestionJustSelected) suggestionJustSelected = false
-    }
-
-    // Matched book used for inline hints.
+    // Matched book for inline hints.
     val matchedBook: BookInfo? = remember(parsed, books) {
         val f = parsed.bookFrag.ifEmpty { return@remember null }
         books.firstOrNull { it.bookName.equals(f, ignoreCase = true) }
             ?: books.firstOrNull { it.bookName.startsWith(f, ignoreCase = true) }
     }
 
-    // Greyed inline suffix rendered BEHIND BasicTextField.
+    // Greyed inline suffix behind BasicTextField — leave [ch]/:[vs] untouched per user request.
     val hintSuffix: String = remember(query, trimmed, matchedBook, parsed) {
         when {
             trimmed.isEmpty() -> ""
@@ -897,22 +896,12 @@ private fun VerseSearchBar(
         }
     }
 
-    // Re-grab keyboard focus after the dropdown opens so typing isn't interrupted.
-    LaunchedEffect(bookSuggestions.size) {
-        if (bookSuggestions.isNotEmpty()) {
-            kotlinx.coroutines.delay(60)
-            try { focusRequester.requestFocus() } catch (_: Exception) {}
-        }
-    }
-
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(50))
                 .background(
-                    // Slightly more opaque in light mode so the field is easy to see
-                    // against the frosted navbar glass.
                     if (isDark) Color.White.copy(alpha = 0.14f) else Color.White.copy(alpha = 0.82f),
                     RoundedCornerShape(50),
                 )
@@ -927,8 +916,6 @@ private fun VerseSearchBar(
             )
             Spacer(Modifier.width(5.dp))
             Box(Modifier.weight(1f)) {
-                // Ghost placeholder / inline suffix — rendered BEHIND BasicTextField so
-                // the user's typed characters naturally cover the relevant portion.
                 when {
                     query.isEmpty() ->
                         Text("John 3:16", style = textStyle,
@@ -942,7 +929,8 @@ private fun VerseSearchBar(
                     onValueChange = { query = it },
                     singleLine = true,
                     textStyle = textStyle.copy(color = fieldTextColor),
-                    // Cursor is invisible until the user actually taps the field.
+                    // Cursor only blinks when the field actually has focus — no phantom
+                    // blinking when the user has tapped elsewhere or dismissed the keyboard.
                     cursorBrush = SolidColor(if (hasFocus) fieldTextColor else Color.Transparent),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = {
@@ -960,18 +948,25 @@ private fun VerseSearchBar(
             }
         }
 
-        // Book-name suggestion dropdown.
+        // Book-name suggestion dropdown.  The DropdownMenu's popup briefly steals
+        // focus when it appears; we re-request focus after a short delay so the
+        // keyboard stays open and the user can keep typing without interruption.
         DropdownMenu(
             expanded = bookSuggestions.isNotEmpty() && hasFocus,
-            onDismissRequest = { /* closes naturally when chapter digit is typed */ },
+            onDismissRequest = { /* dismissed naturally when the query no longer matches */ },
         ) {
             bookSuggestions.forEach { book ->
                 DropdownMenuItem(
                     text = { Text(book.bookName) },
                     onClick = {
-                        suggestionJustSelected = true
+                        // Fill query with the selected book name + space so the user
+                        // can type a chapter immediately.  Re-focus after 150 ms so
+                        // the dropdown has fully dismissed before we touch the field.
                         query = "${book.bookName} "
-                        try { focusRequester.requestFocus() } catch (_: Exception) {}
+                        coroutineScope.launch {
+                            kotlinx.coroutines.delay(150)
+                            try { focusRequester.requestFocus() } catch (_: Exception) {}
+                        }
                     },
                 )
             }

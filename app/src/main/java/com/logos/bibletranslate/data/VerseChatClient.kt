@@ -110,7 +110,8 @@ class VerseChatClient {
         verseContext: String,
     ): Result<Triple<String, String, String?>> {
         val translationLine = if (translationTargetLangName != wordLanguageName) {
-            "3. A short translation of \"$word\" from $wordLanguageName into $translationTargetLangName (1–4 words maximum)."
+            """3. A short translation of "$word" from $wordLanguageName into $translationTargetLangName (1–4 words maximum).
+               CRITICAL: If "$word" is a proper noun — a person's name (e.g. Aarón, Moses, Jehová), place name, or title — do NOT translate it to a pronoun or paraphrase. Instead, write its standard form in $translationTargetLangName (or the unchanged name if it carries across languages). For example, "Aarón" → "Aaron", never "him" or "his"."""
         } else {
             "3. Leave the \"translation\" field as an empty string."
         }
