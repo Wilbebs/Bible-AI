@@ -14,7 +14,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -226,8 +229,10 @@ fun ChatBubble(
                 Modifier
                     .animateContentSize()
                     .padding(
-                        horizontal = if (bubble.isCondensed) 14.dp else 18.dp,
-                        vertical = if (bubble.isCondensed) 8.dp else 16.dp,
+                        start = if (bubble.isCondensed) 14.dp else 18.dp,
+                        end = if (bubble.isCondensed) 14.dp else 18.dp,
+                        top = if (bubble.isCondensed) 8.dp else 4.dp,
+                        bottom = if (bubble.isCondensed) 8.dp else 16.dp,
                     ),
             ) {
                 // ── Drag handle ─────────────────────────────────────────────────
@@ -238,18 +243,18 @@ fun ChatBubble(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            // 40dp tall touch target so fingers don't have to land on the tiny
-                            // 4dp visual pill — makes drag-to-minimize actually reliable.
-                            .height(40.dp)
+                            // 48dp tall touch target so fingers don't have to land on the tiny
+                            // 4dp visual pill. Uses detectDragGestures (not detectVerticalDragGestures)
+                            // so the gesture starts tracking from the first pointer move without
+                            // needing the angle to be classified as "vertical" first.
+                            .height(48.dp)
                             .pointerInput(Unit) {
-                                detectVerticalDragGestures { _, dragAmount ->
-                                    val deltaDp  = with(density) { dragAmount.toDp() }
-                                    // Dragging up (negative dragAmount) increases the fraction;
-                                    // dragging down shrinks it. Clamped to [0.15, 0.80].
+                                detectDragGestures { change, dragAmount ->
+                                    change.consume()
+                                    val deltaDp = with(density) { dragAmount.y.toDp() }
                                     val deltaFrac = -(deltaDp.value / availableHeight.value)
                                     val newFrac = (userHeightFraction + deltaFrac).coerceIn(0.15f, 0.80f)
                                     userHeightFraction = newFrac
-                                    // Drag far enough down → fully minimize to just the translation text.
                                     if (newFrac <= 0.22f) onMinimize()
                                 }
                             },
@@ -259,7 +264,7 @@ fun ChatBubble(
                             modifier = Modifier
                                 .width(40.dp)
                                 .height(4.dp)
-                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(2.dp))
+                                .clip(RoundedCornerShape(2.dp))
                                 .background(
                                     if (Glass.isDarkMode) Color.White.copy(alpha = 0.30f)
                                     else Color.Black.copy(alpha = 0.18f),
@@ -415,6 +420,39 @@ fun ChatBubble(
                     LaunchedEffect(bubble.inputSetSequence) {
                         if (inputValue.text != bubble.followUpInput) {
                             inputValue = TextFieldValue(bubble.followUpInput, TextRange(bubble.followUpInput.length))
+                        }
+                    }
+
+                    // Word-context chips: "Use X in a sentence" + original-language chips,
+                    // set in the ViewModel whenever a single word is defined. Each chip is a
+                    // tappable pill that fires onChipTapped so it goes through the same send
+                    // path as the cycling placeholder suggestions. Hidden once at the cap or
+                    // when the chip list is empty (multi-word, verse-level bubbles).
+                    if (bubble.suggestedChips.isNotEmpty()) {
+                        LazyRow(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp, bottom = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(horizontal = 0.dp),
+                        ) {
+                            items(bubble.suggestedChips) { chip ->
+                                Surface(
+                                    shape = RoundedCornerShape(50),
+                                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.75f),
+                                    modifier = Modifier.clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null,
+                                    ) { onChipTapped(chip) },
+                                ) {
+                                    Text(
+                                        chip,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    )
+                                }
+                            }
                         }
                     }
 

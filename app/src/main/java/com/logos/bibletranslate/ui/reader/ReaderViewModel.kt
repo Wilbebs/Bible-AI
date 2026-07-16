@@ -321,8 +321,9 @@ class ReaderViewModel(
 
     private fun buildAutofillQuestion(words: List<String>): String {
         if (words.isEmpty()) return ""
+        if (words.size == 1) return ""   // single word: auto-defined already, no prefill needed
         val joined = words.joinToString(", ")
-        return if (words.size == 1) "What does $joined mean in this verse?" else "What do $joined mean in this verse?"
+        return "What do $joined mean in this verse?"
     }
 
     /**
@@ -354,7 +355,12 @@ class ReaderViewModel(
                 // Same immediate-loading treatment as a verse-text tap (§3). The word is in the
                 // target language; translate it back to the source (scripture) language for the
                 // "word · translation" pairing shown in the card.
-                _uiState.value = state.copy(chatBubble = updatedBubble.copy(wordInfo = WordInfoState(newQueue.first(), isLoading = true)))
+                val wordChips = listOf("Use \"${newQueue.first()}\" in a sentence") +
+                    suggestedChipsFor(state.selectedBookId, bubble.originalLanguageIndex).take(2)
+                _uiState.value = state.copy(chatBubble = updatedBubble.copy(
+                    wordInfo = WordInfoState(newQueue.first(), isLoading = true),
+                    suggestedChips = wordChips,
+                ))
                 fetchWordInfoAsync(verse, newQueue.first(), bubble.bubbleTargetLanguage, bubble.bubbleTargetLanguage, state.language)
             } else {
                 _uiState.value = state.copy(chatBubble = updatedBubble)

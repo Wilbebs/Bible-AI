@@ -78,7 +78,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -912,7 +914,19 @@ private fun VerseSearchBar(
         }
     }
 
-    Box(modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+    val density = LocalDensity.current
+    var barWidthPx by remember { mutableIntStateOf(0) }
+    var barHeightPx by remember { mutableIntStateOf(0) }
+
+    Box(
+        modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { coords ->
+                barWidthPx = coords.size.width
+                barHeightPx = coords.size.height
+            },
+        contentAlignment = Alignment.CenterStart,
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -968,21 +982,24 @@ private fun VerseSearchBar(
         // field focus never disappear — unlike DropdownMenu (which is a focusable system
         // window) this Popup never steals focus, so backspace works immediately after
         // tapping a suggestion without needing any re-focus dance.
-        if (bookSuggestions.isNotEmpty() && hasFocus) {
+        // Positioned BELOW the bar via offset so it never overlaps the search pill.
+        // Width is locked to the measured bar width so it doesn't balloon out.
+        if (bookSuggestions.isNotEmpty() && hasFocus && barWidthPx > 0) {
             Popup(
-                alignment = Alignment.BottomStart,
+                alignment = Alignment.TopStart,
+                offset = IntOffset(0, barHeightPx),
                 properties = PopupProperties(focusable = false),
             ) {
                 Column(
                     modifier = Modifier
-                        .widthIn(min = 180.dp)
+                        .width(with(density) { barWidthPx.toDp() })
                         .shadow(6.dp, RoundedCornerShape(12.dp))
                         .clip(RoundedCornerShape(12.dp))
                         .background(
                             if (Glass.isDarkMode) Color(0xFF1E1E2E) else Color(0xFFF5F5FF)
                         ),
                 ) {
-                    bookSuggestions.forEach { book ->
+                    bookSuggestions.take(7).forEach { book ->
                         Text(
                             text = book.bookName,
                             style = MaterialTheme.typography.bodyMedium,
@@ -995,7 +1012,7 @@ private fun VerseSearchBar(
                                     query = "${book.bookName} "
                                     try { focusRequester.requestFocus() } catch (_: Exception) {}
                                 }
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
                         )
                     }
                 }
