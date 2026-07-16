@@ -95,9 +95,13 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.painterResource
@@ -259,6 +263,11 @@ fun ReaderScreen(
             // or fully closed depending on which side of the halfway point it's on.
             val coroutineScope = rememberCoroutineScope()
             val density = LocalDensity.current
+            val haptics = LocalHapticFeedback.current
+            // After the first navbar press the pill sinks only 8 dp (a quick acknowledgement
+            // tick) rather than the full 28 dp used on first touch. This prevents the bar from
+            // feeling like it's always crashing down when you tap a button after the first time.
+            var navbarEverPressed by remember { mutableStateOf(false) }
             // Just enough to reveal one row of controls — not a full drawer. Sized to
             // comfortably fit the enlarged logo in the middle of the row.
             val maxPanelHeight = 76.dp
@@ -311,9 +320,12 @@ fun ReaderScreen(
                             // Only animate down on quick-press if search isn't already holding
                             // the bar in place (avoids a double-animate fighting the LaunchedEffect).
                             if (!navbarSearchActive) {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                val sinkPx = with(density) { (if (navbarEverPressed) 8.dp else 28.dp).toPx() }
+                                navbarEverPressed = true
                                 coroutineScope.launch {
                                     navOffsetY.animateTo(
-                                        targetValue = with(density) { 28.dp.toPx() },
+                                        targetValue = sinkPx,
                                         animationSpec = spring(stiffness = 500f),
                                     )
                                 }
@@ -372,7 +384,10 @@ fun ReaderScreen(
                                         if (Glass.isDarkMode) Color.White.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.62f),
                                         RoundedCornerShape(50),
                                     )
-                                    .clickable { showBookChapterPicker = true }
+                                    .clickable {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        showBookChapterPicker = true
+                                    }
                                     .padding(horizontal = 12.dp, vertical = 7.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
@@ -487,6 +502,7 @@ fun ReaderScreen(
                                     .size(20.dp)
                                     .rotate(chevronRotation)
                                     .clickable {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                         val target = if (panelHeight.value < maxPanelHeight / 2f) maxPanelHeight else 0.dp
                                         coroutineScope.launch { panelHeight.animateTo(target, spring(dampingRatio = 0.8f)) }
                                     }
@@ -948,27 +964,41 @@ private fun VerseSearchBar(
             }
         }
 
-        // Book-name suggestion dropdown.  The DropdownMenu's popup briefly steals
-        // focus when it appears; we re-request focus after a short delay so the
-        // keyboard stays open and the user can keep typing without interruption.
-        DropdownMenu(
-            expanded = bookSuggestions.isNotEmpty() && hasFocus,
-            onDismissRequest = { /* dismissed naturally when the query no longer matches */ },
-        ) {
-            bookSuggestions.forEach { book ->
-                DropdownMenuItem(
-                    text = { Text(book.bookName) },
-                    onClick = {
-                        // Fill query with the selected book name + space so the user
-                        // can type a chapter immediately.  Re-focus after 150 ms so
-                        // the dropdown has fully dismissed before we touch the field.
-                        query = "${book.bookName} "
-                        coroutineScope.launch {
-                            kotlinx.coroutines.delay(150)
-                            try { focusRequester.requestFocus() } catch (_: Exception) {}
-                        }
-                    },
-                )
+        // Book-name suggestions rendered as a non-focusable Popup so the keyboard and
+        // field focus never disappear — unlike DropdownMenu (which is a focusable system
+        // window) this Popup never steals focus, so backspace works immediately after
+        // tapping a suggestion without needing any re-focus dance.
+        if (bookSuggestions.isNotEmpty() && hasFocus) {
+            Popup(
+                alignment = Alignment.BottomStart,
+                properties = PopupProperties(focusable = false),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .widthIn(min = 180.dp)
+                        .shadow(6.dp, RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            if (Glass.isDarkMode) Color(0xFF1E1E2E) else Color(0xFFF5F5FF)
+                        ),
+                ) {
+                    bookSuggestions.forEach { book ->
+                        Text(
+                            text = book.bookName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                ) {
+                                    query = "${book.bookName} "
+                                    try { focusRequester.requestFocus() } catch (_: Exception) {}
+                                }
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                        )
+                    }
+                }
             }
         }
     }
@@ -989,6 +1019,7 @@ private fun CompactReadingLanguagePicker(
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val haptics = LocalHapticFeedback.current
     // Liquid-glass tinted pill: skyBlue at reduced opacity so the glass background
     // shows through, consistent with the frosted feel of the other controls.
     Box(modifier) {
@@ -996,7 +1027,10 @@ private fun CompactReadingLanguagePicker(
             modifier = Modifier
                 .clip(RoundedCornerShape(50))
                 .background(Glass.skyBlue.copy(alpha = 0.82f), RoundedCornerShape(50))
-                .clickable { expanded = true }
+                .clickable {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    expanded = true
+                }
                 .padding(horizontal = 10.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

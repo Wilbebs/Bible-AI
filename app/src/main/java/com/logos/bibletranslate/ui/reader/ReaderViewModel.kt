@@ -301,7 +301,14 @@ class ReaderViewModel(
             val word = tokens[newQueue.first()]
             // Show the loading state the moment the word is tapped, before the network
             // call resolves, so a definition visibly starts generating right away.
-            _uiState.value = state.copy(chatBubble = updatedBubble.copy(wordInfo = WordInfoState(word, isLoading = true)))
+            // Also inject a contextual "Use in a sentence" chip so the user has a
+            // natural next step right next to the word they just looked up.
+            val wordChips = listOf("Use \"$word\" in a sentence") +
+                suggestedChipsFor(state.selectedBookId, bubble.originalLanguageIndex).take(2)
+            _uiState.value = state.copy(chatBubble = updatedBubble.copy(
+                wordInfo = WordInfoState(word, isLoading = true),
+                suggestedChips = wordChips,
+            ))
             // The word itself is in the reading language (state.language), but the pronunciation/
             // definition should print in whatever language is currently selected in the bubble's
             // own dropdown, so it stays consistent with everything else in the bubble. The

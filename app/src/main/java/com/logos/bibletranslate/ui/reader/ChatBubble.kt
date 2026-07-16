@@ -238,7 +238,9 @@ fun ChatBubble(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 6.dp)
+                            // 40dp tall touch target so fingers don't have to land on the tiny
+                            // 4dp visual pill — makes drag-to-minimize actually reliable.
+                            .height(40.dp)
                             .pointerInput(Unit) {
                                 detectVerticalDragGestures { _, dragAmount ->
                                     val deltaDp  = with(density) { dragAmount.toDp() }
