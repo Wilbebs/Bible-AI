@@ -94,6 +94,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -122,6 +123,31 @@ import com.logos.bibletranslate.data.WordTranslationRepository
 import com.logos.bibletranslate.ui.theme.Glass
 import com.logos.bibletranslate.ui.theme.Sparkle
 import kotlinx.coroutines.delay
+
+/** Parsed components of a verse search query — defined at file scope to avoid recomposition issues. */
+private data class VerseQueryParsed(
+    val bookFrag: String,
+    val chapterFrag: String?,
+    val verseFrag: String?,
+)
+
+private fun parseVerseSearchQuery(trimmed: String): VerseQueryParsed {
+    val colonIdx = trimmed.indexOf(':')
+    if (colonIdx > 0) {
+        val before = trimmed.substring(0, colonIdx).trim()
+        val after  = trimmed.substring(colonIdx + 1).trim()
+        val spIdx  = before.lastIndexOf(' ')
+        return if (spIdx > 0 && before.substring(spIdx + 1).all { it.isDigit() })
+            VerseQueryParsed(before.substring(0, spIdx), before.substring(spIdx + 1), after)
+        else
+            VerseQueryParsed(before, null, after)
+    }
+    val spIdx = trimmed.lastIndexOf(' ')
+    return if (spIdx > 0 && trimmed.substring(spIdx + 1).all { it.isDigit() })
+        VerseQueryParsed(trimmed.substring(0, spIdx), trimmed.substring(spIdx + 1), null)
+    else
+        VerseQueryParsed(trimmed, null, null)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -245,10 +271,35 @@ fun ReaderScreen(
                 label = "chevronRotation",
             )
 
-            // Press-down animation: the pill sinks 28 dp toward the thumb on any touch
-            // and springs back on release. Enough to bring it into easy one-handed reach
-            // without feeling like the bar is flying away.
+            // navbarSearchActive: true while the search field has keyboard focus.
+            // When active the pill stays lowered and the settings drawer auto-opens;
+            // when the user dismisses the keyboard (scrolls, taps elsewhere) it rises back.
+            var navbarSearchActive by remember { mutableStateOf(false) }
+
+            // Declared here so the LaunchedEffects below (and the pointerInput further down)
+            // can all reference the same Animatable without a forward-reference error.
             val navOffsetY = remember { Animatable(0f) }
+
+            // Sink/rise the pill and open/close the settings drawer based on search activity.
+            LaunchedEffect(navbarSearchActive) {
+                if (navbarSearchActive) {
+                    coroutineScope.launch {
+                        navOffsetY.animateTo(with(density) { 28.dp.toPx() }, spring(stiffness = 500f))
+                    }
+                    coroutineScope.launch {
+                        panelHeight.animateTo(maxPanelHeight, spring(dampingRatio = 0.8f))
+                    }
+                } else {
+                    coroutineScope.launch {
+                        navOffsetY.animateTo(0f, spring(dampingRatio = 0.55f, stiffness = 280f))
+                    }
+                }
+            }
+
+            // Scrolling the verse list clears search active state so the navbar rises back.
+            LaunchedEffect(listState.isScrollInProgress) {
+                if (listState.isScrollInProgress && navbarSearchActive) navbarSearchActive = false
+            }
 
             Box(
                 modifier = Modifier
@@ -257,20 +308,27 @@ fun ReaderScreen(
                     .pointerInput(Unit) {
                         awaitEachGesture {
                             awaitFirstDown(requireUnconsumed = false)
-                            coroutineScope.launch {
-                                navOffsetY.animateTo(
-                                    targetValue = with(density) { 28.dp.toPx() },
-                                    animationSpec = spring(stiffness = 500f),
-                                )
+                            // Only animate down on quick-press if search isn't already holding
+                            // the bar in place (avoids a double-animate fighting the LaunchedEffect).
+                            if (!navbarSearchActive) {
+                                coroutineScope.launch {
+                                    navOffsetY.animateTo(
+                                        targetValue = with(density) { 28.dp.toPx() },
+                                        animationSpec = spring(stiffness = 500f),
+                                    )
+                                }
                             }
                             do {
                                 val event = awaitPointerEvent(PointerEventPass.Final)
                             } while (event.changes.any { it.pressed })
-                            coroutineScope.launch {
-                                navOffsetY.animateTo(
-                                    targetValue = 0f,
-                                    animationSpec = spring(dampingRatio = 0.55f, stiffness = 280f),
-                                )
+                            // Only spring back on release if search isn't keeping it down.
+                            if (!navbarSearchActive) {
+                                coroutineScope.launch {
+                                    navOffsetY.animateTo(
+                                        targetValue = 0f,
+                                        animationSpec = spring(dampingRatio = 0.55f, stiffness = 280f),
+                                    )
+                                }
                             }
                         }
                     },
@@ -337,6 +395,7 @@ fun ReaderScreen(
                             VerseSearchBar(
                                 books = uiState.books,
                                 onSubmit = viewModel::onVerseSearchSubmitted,
+                                onActiveChanged = { navbarSearchActive = it },
                                 modifier = Modifier.weight(1f),
                             )
                         }
@@ -774,27 +833,29 @@ private fun DarkModeToggleSwitch(isDarkMode: Boolean, onToggle: () -> Unit, modi
 }
 
 /**
- * Smart verse search with inline greyed hints and progressive suggestions.
+ * Smart verse search with inline greyed hints and progressive book suggestions.
  *
- * Typing phases:
- *  • Letters only      → suggests matching book names (full name, prefix match)
- *  • "Book " (space)   → inline hint "5 · 14" shows chapter range; dropdown closes
- *  • "Book 5"          → inline hint ":1 · 22" shows verse range; single-tap chip to go
- *  • "Book 5:3"        → ready to submit
- *  • "Book 5" submit   → navigates to chapter 5, verse 1
- *  • "Genesis" submit  → navigates to Genesis 1:1
+ * • Type letters → book-name dropdown (prefix match, up to 7, sorted)
+ * • Tap a suggestion → field fills "Genesis " ready for chapter
+ * • "Genesis 5" submit → ch 5, v 1.  "Genesis" submit → 1:1
+ * • Inline greyed suffix shows "[ch]" or ":[vs]" as context-aware ghost hint
  *
- * Focus fix: FocusRequester re-grabs the text field after the dropdown appears so
- * the system soft keyboard stays open and typing isn't interrupted.
+ * Focus: FocusRequester keeps the keyboard up while the dropdown is open.
+ * The cursor is invisible until the user taps into the field (no phantom blink).
  */
 @Composable
 private fun VerseSearchBar(
     books: List<BookInfo>,
     onSubmit: (String) -> Unit,
+    onActiveChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var hasFocus by remember { mutableStateOf(false) }
+    // When a book suggestion is tapped we set this to suppress the dropdown
+    // until the user starts typing again (prevents the crash from the dropdown
+    // re-opening immediately after the suggestion onClick fires).
+    var suggestionJustSelected by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val isDark = Glass.isDarkMode
@@ -802,63 +863,41 @@ private fun VerseSearchBar(
                          else MaterialTheme.colorScheme.onSurface
     val textStyle = MaterialTheme.typography.labelSmall
 
-    // ── Parse query into (bookFragment, chapterFragment?, colonSeen) ──────────
-    data class Parsed(
-        val bookFrag: String,
-        val chapterFrag: String?,   // digits after last space before ':'
-        val verseFrag: String?,     // digits after ':'
-    )
     val trimmed = query.trim()
-    val parsed: Parsed = remember(trimmed) {
-        val colonIdx = trimmed.indexOf(':')
-        if (colonIdx > 0) {
-            val before = trimmed.substring(0, colonIdx).trim()
-            val after  = trimmed.substring(colonIdx + 1).trim()
-            val spIdx  = before.lastIndexOf(' ')
-            if (spIdx > 0 && before.substring(spIdx + 1).all { it.isDigit() })
-                Parsed(before.substring(0, spIdx), before.substring(spIdx + 1), after)
-            else
-                Parsed(before, null, after)
-        } else {
-            val spIdx = trimmed.lastIndexOf(' ')
-            if (spIdx > 0 && trimmed.substring(spIdx + 1).all { it.isDigit() })
-                Parsed(trimmed.substring(0, spIdx), trimmed.substring(spIdx + 1), null)
-            else
-                Parsed(trimmed, null, null)
-        }
-    }
+    val parsed = remember(trimmed) { parseVerseSearchQuery(trimmed) }
 
-    // ── Book suggestions: shown while still in the book-name phase ────────────
-    val bookSuggestions: List<BookInfo> = remember(parsed, books) {
-        if (parsed.chapterFrag != null || parsed.bookFrag.isEmpty()) emptyList()
+    // Book suggestions: only while still in the book-name phase.
+    val bookSuggestions: List<BookInfo> = remember(parsed, books, suggestionJustSelected) {
+        if (suggestionJustSelected || parsed.chapterFrag != null || parsed.bookFrag.isEmpty()) emptyList()
         else books.filter { it.bookName.startsWith(parsed.bookFrag, ignoreCase = true) }
                   .sortedBy { it.bookName }
                   .take(7)
     }
 
-    // ── Matched book (exact then prefix) — used for hints ────────────────────
+    // Reset the "just selected" guard whenever the user types again.
+    LaunchedEffect(trimmed) {
+        if (suggestionJustSelected) suggestionJustSelected = false
+    }
+
+    // Matched book used for inline hints.
     val matchedBook: BookInfo? = remember(parsed, books) {
         val f = parsed.bookFrag.ifEmpty { return@remember null }
         books.firstOrNull { it.bookName.equals(f, ignoreCase = true) }
             ?: books.firstOrNull { it.bookName.startsWith(f, ignoreCase = true) }
     }
 
-    // ── Greyed inline suffix rendered BEHIND the BasicTextField ───────────────
-    // Because BasicTextField draws its own opaque text on top, only the suffix
-    // AFTER what the user has typed shows through as grey — an iOS-style hint.
+    // Greyed inline suffix rendered BEHIND BasicTextField.
     val hintSuffix: String = remember(query, trimmed, matchedBook, parsed) {
         when {
             trimmed.isEmpty() -> ""
-            // Book matched, no chapter started, no trailing space → hint the chapter
             matchedBook != null && parsed.chapterFrag == null && !query.endsWith(" ") -> " [ch]"
-            // Chapter digits present, no colon yet → hint the verse
             matchedBook != null && parsed.chapterFrag != null && parsed.verseFrag == null
                     && !query.endsWith(":") -> ":[vs]"
             else -> ""
         }
     }
 
-    // ── Re-grab focus after dropdown opens so keyboard stays up ──────────────
+    // Re-grab keyboard focus after the dropdown opens so typing isn't interrupted.
     LaunchedEffect(bookSuggestions.size) {
         if (bookSuggestions.isNotEmpty()) {
             kotlinx.coroutines.delay(60)
@@ -872,7 +911,9 @@ private fun VerseSearchBar(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(50))
                 .background(
-                    if (isDark) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.62f),
+                    // Slightly more opaque in light mode so the field is easy to see
+                    // against the frosted navbar glass.
+                    if (isDark) Color.White.copy(alpha = 0.14f) else Color.White.copy(alpha = 0.82f),
                     RoundedCornerShape(50),
                 )
                 .padding(horizontal = 10.dp, vertical = 7.dp),
@@ -881,15 +922,16 @@ private fun VerseSearchBar(
             Icon(
                 imageVector = Icons.Filled.Search,
                 contentDescription = null,
-                tint = if (isDark) Color.White.copy(alpha = 0.55f) else Color.Black.copy(alpha = 0.45f),
+                tint = if (isDark) Color.White.copy(alpha = 0.55f) else Color.Black.copy(alpha = 0.50f),
                 modifier = Modifier.size(14.dp),
             )
             Spacer(Modifier.width(5.dp))
             Box(Modifier.weight(1f)) {
-                // Placeholder / inline hint layer — drawn BEHIND BasicTextField
+                // Ghost placeholder / inline suffix — rendered BEHIND BasicTextField so
+                // the user's typed characters naturally cover the relevant portion.
                 when {
                     query.isEmpty() ->
-                        Text("Genesis 5 · Jn 3:16", style = textStyle,
+                        Text("John 3:16", style = textStyle,
                              color = fieldTextColor.copy(alpha = 0.40f), maxLines = 1)
                     hintSuffix.isNotEmpty() ->
                         Text(query + hintSuffix, style = textStyle,
@@ -900,6 +942,8 @@ private fun VerseSearchBar(
                     onValueChange = { query = it },
                     singleLine = true,
                     textStyle = textStyle.copy(color = fieldTextColor),
+                    // Cursor is invisible until the user actually taps the field.
+                    cursorBrush = SolidColor(if (hasFocus) fieldTextColor else Color.Transparent),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = {
                         onSubmit(query)
@@ -908,21 +952,24 @@ private fun VerseSearchBar(
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
-                        .onFocusChanged { hasFocus = it.isFocused },
+                        .onFocusChanged {
+                            hasFocus = it.isFocused
+                            onActiveChanged(it.isFocused)
+                        },
                 )
             }
         }
 
-        // Book-name suggestion chips — only while in the book-name phase
+        // Book-name suggestion dropdown.
         DropdownMenu(
             expanded = bookSuggestions.isNotEmpty() && hasFocus,
-            onDismissRequest = { /* dismissed naturally when chapter digit added */ },
+            onDismissRequest = { /* closes naturally when chapter digit is typed */ },
         ) {
             bookSuggestions.forEach { book ->
                 DropdownMenuItem(
                     text = { Text(book.bookName) },
                     onClick = {
-                        // Append a space so the user can immediately type a chapter number
+                        suggestionJustSelected = true
                         query = "${book.bookName} "
                         try { focusRequester.requestFocus() } catch (_: Exception) {}
                     },
@@ -974,7 +1021,9 @@ private fun CompactReadingLanguagePicker(
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             options.forEach { language ->
                 DropdownMenuItem(
-                    text = { Text(language.displayName) },
+                    // Show "English (KJV)" / "Español (Reina Valera)" so users know which
+                    // Bible version they're switching to, not just the language name.
+                    text = { Text(language.displayNameWithTranslation) },
                     onClick = {
                         onSelected(language)
                         expanded = false

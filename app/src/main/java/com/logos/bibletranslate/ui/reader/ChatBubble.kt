@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -21,6 +23,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -161,7 +166,12 @@ fun ChatBubble(
     val widthFraction = 0.94f
 
     BoxWithConstraints(modifier) {
-        val maxMessageListHeight = maxHeight * 0.7f
+        val density = LocalDensity.current
+        // User-controlled height fraction: starts at 70 % of available screen, drag the handle
+        // up to expand, down to condense (min 15 % so at least one message stays visible).
+        var userHeightFraction by remember { mutableFloatStateOf(0.70f) }
+        val availableHeight = maxHeight   // captured so it's accessible inside pointerInput lambdas
+        val maxMessageListHeight = availableHeight * userHeightFraction
 
         // A frosted "pane of glass" floating over the reader: a translucent
         // gradient fill plus a bright rim-light border and soft shadow, in
@@ -198,15 +208,46 @@ fun ChatBubble(
         ) {
             Column(
                 Modifier
-                    // Grows/shrinks smoothly as words stream into the panel (definitions and
-                    // replies appearing token by token) and as condensed ↔ full layouts swap —
-                    // the window literally expands as generation fills it.
                     .animateContentSize()
                     .padding(
                         horizontal = if (bubble.isCondensed) 14.dp else 18.dp,
                         vertical = if (bubble.isCondensed) 8.dp else 16.dp,
                     ),
             ) {
+                // ── Drag handle ─────────────────────────────────────────────────
+                // A thin pill at the top of the panel — drag up to expand the message
+                // list, drag down to condense it so scripture behind is more readable.
+                // Standard bottom-sheet pattern: visual affordance + gesture zone.
+                if (!bubble.isCondensed) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
+                            .pointerInput(Unit) {
+                                detectVerticalDragGestures { _, dragAmount ->
+                                    val deltaDp  = with(density) { dragAmount.toDp() }
+                                    // Dragging up (negative dragAmount) increases the fraction;
+                                    // dragging down shrinks it. Clamped to [0.15, 0.80].
+                                    val deltaFrac = -(deltaDp.value / availableHeight.value)
+                                    userHeightFraction = (userHeightFraction + deltaFrac)
+                                        .coerceIn(0.15f, 0.80f)
+                                }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .width(40.dp)
+                                .height(4.dp)
+                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(2.dp))
+                                .background(
+                                    if (Glass.isDarkMode) Color.White.copy(alpha = 0.30f)
+                                    else Color.Black.copy(alpha = 0.18f),
+                                ),
+                        )
+                    }
+                }
+
                 if (bubble.isCondensed) {
                     CondensedWordRow(bubble, onDefine, onClose)
                     return@Column
@@ -376,19 +417,19 @@ fun ChatBubble(
                                 if (textChanged) onInputChanged(it.text)
                             },
                             placeholder = {
-                                // Small and strictly single-line so a long suggestion can never
-                                // inflate the field's height — it just trails off in an ellipsis.
-                                // Nudged left a few pixels (the field's own start padding plus
-                                // the leading sparkle icon's gap otherwise pushes it in further
-                                // than the sparkle needs) so longer suggestions have more room
-                                // to read before the ellipsis kicks in.
-                                Text(
-                                    typedSuggestion,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.offset(x = (-6).dp),
-                                )
+                                // Hide the cycling suggestion the moment the user taps into the
+                                // field — the blinking cursor already signals "ready to type",
+                                // and the suggestion text behind it looked like the cursor was
+                                // randomly positioned mid-word (image feedback, item 7).
+                                if (!isInputFocused) {
+                                    Text(
+                                        typedSuggestion,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.offset(x = (-6).dp),
+                                    )
+                                }
                             },
                             leadingIcon = { Sparkle(size = 14.dp) },
                             // The arrow is now the *only* send affordance — no separate Send

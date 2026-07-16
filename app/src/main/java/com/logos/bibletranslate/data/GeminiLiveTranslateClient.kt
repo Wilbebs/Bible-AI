@@ -39,15 +39,15 @@ class GeminiLiveTranslateClient {
                     Text to translate: "$selectedText"
                     Verse context ($sourceLangName): "$sourceVerseText"
                     Reference $targetLangName translation of the same verse: "$targetVerseText"
-                    Provide a COMPLETE translation that covers every word of the input — do not omit or summarise any part.
+                    Provide a COMPLETE, LITERAL translation that covers every word of the input — preserve the exact phrasing, do not omit or summarise any part.
                     Respond with ONLY the translated text, nothing else.
                 """.trimIndent()
             } else {
                 """
                     Bible verse context. Source ($sourceLangName): "$sourceVerseText"
                     Official $targetLangName translation of the same verse: "$targetVerseText"
-                    What is the $targetLangName word or short phrase that "$selectedText" corresponds to in the official translation above, given this context?
-                    Respond with ONLY the translated word or phrase, nothing else.
+                    Find the EXACT words in the official $targetLangName translation above that correspond to "$selectedText". Copy those words verbatim from the reference — do not substitute synonyms, do not paraphrase, and preserve every word of the matching phrase (e.g. "flor de harina" not just "harina").
+                    Respond with ONLY those exact translated words, nothing else.
                 """.trimIndent()
             }
 
