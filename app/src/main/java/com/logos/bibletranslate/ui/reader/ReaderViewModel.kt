@@ -1064,15 +1064,31 @@ class ReaderViewModel(
  * a prefix match so a partially-typed book name picked from the autosuggest list still resolves.
  */
 private fun parseVerseQuery(query: String, books: List<BookInfo>): Triple<BookInfo, Int, Int>? {
-    val match = Regex("""^\s*(.+?)\s+(\d+)\s*:\s*(\d+)\s*$""").find(query) ?: return null
-    val (bookPart, chapterStr, verseStr) = match.destructured
-    val chapter = chapterStr.toIntOrNull() ?: return null
-    val verseNumber = verseStr.toIntOrNull() ?: return null
-    val trimmedBookPart = bookPart.trim()
-    val book = books.firstOrNull { it.bookName.equals(trimmedBookPart, ignoreCase = true) }
-        ?: books.firstOrNull { it.bookName.startsWith(trimmedBookPart, ignoreCase = true) }
-        ?: return null
-    return Triple(book, chapter, verseNumber)
+    fun findBook(fragment: String): BookInfo? =
+        books.firstOrNull { it.bookName.equals(fragment, ignoreCase = true) }
+            ?: books.firstOrNull { it.bookName.startsWith(fragment, ignoreCase = true) }
+
+    // Full "Book Chapter:Verse" (e.g. "Jn 3:16", "Genesis 5:3")
+    Regex("""^\s*(.+?)\s+(\d+)\s*:\s*(\d+)\s*$""").find(query)?.let { m ->
+        val (bookPart, chStr, vsStr) = m.destructured
+        val book = findBook(bookPart.trim()) ?: return@let null
+        val ch = chStr.toIntOrNull() ?: return@let null
+        val vs = vsStr.toIntOrNull() ?: return@let null
+        return Triple(book, ch, vs)
+    }
+    // "Book Chapter" without verse — navigate to chapter:1 (e.g. "Genesis 10", "Lev 6")
+    Regex("""^\s*(.+?)\s+(\d+)\s*$""").find(query)?.let { m ->
+        val (bookPart, chStr) = m.destructured
+        val book = findBook(bookPart.trim()) ?: return@let null
+        val ch = chStr.toIntOrNull() ?: return@let null
+        return Triple(book, ch, 1)
+    }
+    // "Book" alone — navigate to chapter 1, verse 1
+    val bookOnly = query.trim()
+    if (bookOnly.isNotEmpty() && bookOnly.none { it.isDigit() || it == ':' }) {
+        findBook(bookOnly)?.let { return Triple(it, 1, 1) }
+    }
+    return null
 }
 
 private fun List<String>.distinctFromNeighbors(): List<String> =

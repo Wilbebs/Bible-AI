@@ -13,6 +13,8 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.background
@@ -87,15 +89,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.logos.bibletranslate.R
 import com.logos.bibletranslate.ui.theme.AccentTheme
@@ -237,21 +245,43 @@ fun ReaderScreen(
                 label = "chevronRotation",
             )
 
+            // Press-down animation: the pill sinks 28 dp toward the thumb on any touch
+            // and springs back on release. Enough to bring it into easy one-handed reach
+            // without feeling like the bar is flying away.
+            val navOffsetY = remember { Animatable(0f) }
+
             Box(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .offset { IntOffset(0, navOffsetY.value.roundToInt()) }
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            coroutineScope.launch {
+                                navOffsetY.animateTo(
+                                    targetValue = with(density) { 28.dp.toPx() },
+                                    animationSpec = spring(stiffness = 500f),
+                                )
+                            }
+                            do {
+                                val event = awaitPointerEvent(PointerEventPass.Final)
+                            } while (event.changes.any { it.pressed })
+                            coroutineScope.launch {
+                                navOffsetY.animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = spring(dampingRatio = 0.55f, stiffness = 280f),
+                                )
+                            }
+                        }
+                    },
                 contentAlignment = Alignment.TopCenter,
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = horizontalMargin, vertical = verticalMargin)
-                        // Shadow gives the floating pill its lift above the scripture text.
-                        // Must come before .clip() so it renders into the margin around the
-                        // pill rather than being clipped away.
                         .shadow(elevation = 8.dp, shape = navBarShape)
                         .clip(navBarShape)
-                        // Subtle frosted-glass rim — catches light at the pill's edges the
-                        // same way real glass would.
                         .border(
                             BorderStroke(0.7.dp, Color.White.copy(alpha = if (Glass.isDarkMode) 0.13f else 0.40f)),
                             navBarShape,
@@ -259,24 +289,6 @@ fun ReaderScreen(
                         .background(Glass.navBarBrush()),
                     contentAlignment = Alignment.TopCenter,
                 ) {
-                    // Specular highlight — a thin band of white light at the very top of
-                    // the pill, the iOS 27 "liquid glass" rim. Layered behind the Column
-                    // so controls render on top; appears even when the drawer is collapsed.
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(22.dp)
-                            .align(Alignment.TopCenter)
-                            .background(
-                                Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color.White.copy(alpha = if (Glass.isDarkMode) 0.10f else 0.32f),
-                                        Color.Transparent,
-                                    ),
-                                ),
-                            ),
-                    )
-
                     Column(modifier = Modifier.fillMaxWidth()) {
                         // All three controls sit in a single Row and size to their own content.
                         // No fixed height on individual controls — vertical alignment comes from
@@ -762,9 +774,18 @@ private fun DarkModeToggleSwitch(isDarkMode: Boolean, onToggle: () -> Unit, modi
 }
 
 /**
- * Exact verse search — "[Book] [chapter]:[verse]" — with book-name autosuggest while the
- * book-name portion is being typed. Submitting (search IME action) navigates straight to
- * that verse and hands off to the highlight/scroll pipeline in [ReaderScreen].
+ * Smart verse search with inline greyed hints and progressive suggestions.
+ *
+ * Typing phases:
+ *  • Letters only      → suggests matching book names (full name, prefix match)
+ *  • "Book " (space)   → inline hint "5 · 14" shows chapter range; dropdown closes
+ *  • "Book 5"          → inline hint ":1 · 22" shows verse range; single-tap chip to go
+ *  • "Book 5:3"        → ready to submit
+ *  • "Book 5" submit   → navigates to chapter 5, verse 1
+ *  • "Genesis" submit  → navigates to Genesis 1:1
+ *
+ * Focus fix: FocusRequester re-grabs the text field after the dropdown appears so
+ * the system soft keyboard stays open and typing isn't interrupted.
  */
 @Composable
 private fun VerseSearchBar(
@@ -773,21 +794,85 @@ private fun VerseSearchBar(
     modifier: Modifier = Modifier,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
-    var expanded by remember { mutableStateOf(false) }
+    var hasFocus by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
+    val isDark = Glass.isDarkMode
+    val fieldTextColor = if (isDark) Color.White.copy(alpha = 0.90f)
+                         else MaterialTheme.colorScheme.onSurface
+    val textStyle = MaterialTheme.typography.labelSmall
 
-    // Fills whatever horizontal space the parent Row assigns (weight(1f) from call site).
-    // No separate border — the frosted fill is the only visual boundary, matching the
-    // other controls' liquid-glass look. Text field stretches to full pill width.
+    // ── Parse query into (bookFragment, chapterFragment?, colonSeen) ──────────
+    data class Parsed(
+        val bookFrag: String,
+        val chapterFrag: String?,   // digits after last space before ':'
+        val verseFrag: String?,     // digits after ':'
+    )
+    val trimmed = query.trim()
+    val parsed: Parsed = remember(trimmed) {
+        val colonIdx = trimmed.indexOf(':')
+        if (colonIdx > 0) {
+            val before = trimmed.substring(0, colonIdx).trim()
+            val after  = trimmed.substring(colonIdx + 1).trim()
+            val spIdx  = before.lastIndexOf(' ')
+            if (spIdx > 0 && before.substring(spIdx + 1).all { it.isDigit() })
+                Parsed(before.substring(0, spIdx), before.substring(spIdx + 1), after)
+            else
+                Parsed(before, null, after)
+        } else {
+            val spIdx = trimmed.lastIndexOf(' ')
+            if (spIdx > 0 && trimmed.substring(spIdx + 1).all { it.isDigit() })
+                Parsed(trimmed.substring(0, spIdx), trimmed.substring(spIdx + 1), null)
+            else
+                Parsed(trimmed, null, null)
+        }
+    }
+
+    // ── Book suggestions: shown while still in the book-name phase ────────────
+    val bookSuggestions: List<BookInfo> = remember(parsed, books) {
+        if (parsed.chapterFrag != null || parsed.bookFrag.isEmpty()) emptyList()
+        else books.filter { it.bookName.startsWith(parsed.bookFrag, ignoreCase = true) }
+                  .sortedBy { it.bookName }
+                  .take(7)
+    }
+
+    // ── Matched book (exact then prefix) — used for hints ────────────────────
+    val matchedBook: BookInfo? = remember(parsed, books) {
+        val f = parsed.bookFrag.ifEmpty { return@remember null }
+        books.firstOrNull { it.bookName.equals(f, ignoreCase = true) }
+            ?: books.firstOrNull { it.bookName.startsWith(f, ignoreCase = true) }
+    }
+
+    // ── Greyed inline suffix rendered BEHIND the BasicTextField ───────────────
+    // Because BasicTextField draws its own opaque text on top, only the suffix
+    // AFTER what the user has typed shows through as grey — an iOS-style hint.
+    val hintSuffix: String = remember(query, trimmed, matchedBook, parsed) {
+        when {
+            trimmed.isEmpty() -> ""
+            // Book matched, no chapter started, no trailing space → hint the chapter
+            matchedBook != null && parsed.chapterFrag == null && !query.endsWith(" ") -> " [ch]"
+            // Chapter digits present, no colon yet → hint the verse
+            matchedBook != null && parsed.chapterFrag != null && parsed.verseFrag == null
+                    && !query.endsWith(":") -> ":[vs]"
+            else -> ""
+        }
+    }
+
+    // ── Re-grab focus after dropdown opens so keyboard stays up ──────────────
+    LaunchedEffect(bookSuggestions.size) {
+        if (bookSuggestions.isNotEmpty()) {
+            kotlinx.coroutines.delay(60)
+            try { focusRequester.requestFocus() } catch (_: Exception) {}
+        }
+    }
+
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
-        val fieldTextColor = if (Glass.isDarkMode) Color.White.copy(alpha = 0.90f)
-                             else MaterialTheme.colorScheme.onSurface
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(50))
                 .background(
-                    if (Glass.isDarkMode) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.62f),
+                    if (isDark) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.62f),
                     RoundedCornerShape(50),
                 )
                 .padding(horizontal = 10.dp, vertical = 7.dp),
@@ -796,44 +881,50 @@ private fun VerseSearchBar(
             Icon(
                 imageVector = Icons.Filled.Search,
                 contentDescription = null,
-                tint = if (Glass.isDarkMode) Color.White.copy(alpha = 0.6f) else Color.Black.copy(alpha = 0.5f),
+                tint = if (isDark) Color.White.copy(alpha = 0.55f) else Color.Black.copy(alpha = 0.45f),
                 modifier = Modifier.size(14.dp),
             )
             Spacer(Modifier.width(5.dp))
             Box(Modifier.weight(1f)) {
-                if (query.isEmpty()) {
-                    Text(
-                        "Jn 3:16",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = fieldTextColor.copy(alpha = 0.45f),
-                    )
+                // Placeholder / inline hint layer — drawn BEHIND BasicTextField
+                when {
+                    query.isEmpty() ->
+                        Text("Genesis 5 · Jn 3:16", style = textStyle,
+                             color = fieldTextColor.copy(alpha = 0.40f), maxLines = 1)
+                    hintSuffix.isNotEmpty() ->
+                        Text(query + hintSuffix, style = textStyle,
+                             color = fieldTextColor.copy(alpha = 0.35f), maxLines = 1)
                 }
                 BasicTextField(
                     value = query,
-                    onValueChange = { text ->
-                        query = text
-                        expanded = verseSearchBookSuggestions(text, books).isNotEmpty()
-                    },
+                    onValueChange = { query = it },
                     singleLine = true,
-                    textStyle = MaterialTheme.typography.labelSmall.copy(color = fieldTextColor),
+                    textStyle = textStyle.copy(color = fieldTextColor),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = {
-                        expanded = false
                         onSubmit(query)
                         focusManager.clearFocus()
                     }),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester)
+                        .onFocusChanged { hasFocus = it.isFocused },
                 )
             }
         }
-        val suggestions = verseSearchBookSuggestions(query, books)
-        DropdownMenu(expanded = expanded && suggestions.isNotEmpty(), onDismissRequest = { expanded = false }) {
-            suggestions.forEach { book ->
+
+        // Book-name suggestion chips — only while in the book-name phase
+        DropdownMenu(
+            expanded = bookSuggestions.isNotEmpty() && hasFocus,
+            onDismissRequest = { /* dismissed naturally when chapter digit added */ },
+        ) {
+            bookSuggestions.forEach { book ->
                 DropdownMenuItem(
                     text = { Text(book.bookName) },
                     onClick = {
+                        // Append a space so the user can immediately type a chapter number
                         query = "${book.bookName} "
-                        expanded = false
+                        try { focusRequester.requestFocus() } catch (_: Exception) {}
                     },
                 )
             }
@@ -894,9 +985,3 @@ private fun CompactReadingLanguagePicker(
     }
 }
 
-/** Book-name autosuggest only kicks in while the book-name portion is being typed (before any digit/colon). */
-private fun verseSearchBookSuggestions(query: String, books: List<BookInfo>): List<BookInfo> {
-    val trimmed = query.trim()
-    if (trimmed.isEmpty() || trimmed.any { it.isDigit() || it == ':' }) return emptyList()
-    return books.filter { it.bookName.startsWith(trimmed, ignoreCase = true) }.take(6)
-}
