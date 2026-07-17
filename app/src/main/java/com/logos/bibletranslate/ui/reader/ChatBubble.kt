@@ -14,7 +14,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -231,31 +232,35 @@ fun ChatBubble(
                     .padding(
                         start = if (bubble.isCondensed) 14.dp else 18.dp,
                         end = if (bubble.isCondensed) 14.dp else 18.dp,
-                        top = if (bubble.isCondensed) 8.dp else 4.dp,
+                        top = if (bubble.isCondensed) 8.dp else 0.dp,
                         bottom = if (bubble.isCondensed) 8.dp else 16.dp,
                     ),
             ) {
                 // ── Drag handle ─────────────────────────────────────────────────
-                // A thin pill at the top of the panel — drag up to expand the message
-                // list, drag down to condense it so scripture behind is more readable.
-                // Standard bottom-sheet pattern: visual affordance + gesture zone.
+                // Thin pill centred in a 28dp hit zone. Uses raw awaitEachGesture
+                // rather than detectDragGestures so tracking starts from the very
+                // first pointer move — no touch-slop delay, responds to the lightest tap.
                 if (!bubble.isCondensed) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            // 48dp tall touch target so fingers don't have to land on the tiny
-                            // 4dp visual pill. Uses detectDragGestures (not detectVerticalDragGestures)
-                            // so the gesture starts tracking from the first pointer move without
-                            // needing the angle to be classified as "vertical" first.
-                            .height(48.dp)
+                            .height(28.dp)
                             .pointerInput(Unit) {
-                                detectDragGestures { change, dragAmount ->
-                                    change.consume()
-                                    val deltaDp = with(density) { dragAmount.y.toDp() }
-                                    val deltaFrac = -(deltaDp.value / availableHeight.value)
-                                    val newFrac = (userHeightFraction + deltaFrac).coerceIn(0.15f, 0.80f)
-                                    userHeightFraction = newFrac
-                                    if (newFrac <= 0.22f) onMinimize()
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    down.consume()
+                                    var lastY = down.position.y
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull() ?: break
+                                        val dy = change.position.y - lastY
+                                        lastY = change.position.y
+                                        change.consume()
+                                        val deltaDp = with(density) { dy.toDp() }
+                                        val deltaFrac = -(deltaDp.value / availableHeight.value)
+                                        userHeightFraction = (userHeightFraction + deltaFrac).coerceIn(0.15f, 0.80f)
+                                        if (userHeightFraction <= 0.22f) onMinimize()
+                                    } while (event.changes.any { it.pressed })
                                 }
                             },
                         contentAlignment = Alignment.Center,
@@ -266,8 +271,8 @@ fun ChatBubble(
                                 .height(4.dp)
                                 .clip(RoundedCornerShape(2.dp))
                                 .background(
-                                    if (Glass.isDarkMode) Color.White.copy(alpha = 0.30f)
-                                    else Color.Black.copy(alpha = 0.18f),
+                                    if (Glass.isDarkMode) Color.White.copy(alpha = 0.35f)
+                                    else Color.Black.copy(alpha = 0.22f),
                                 ),
                         )
                     }

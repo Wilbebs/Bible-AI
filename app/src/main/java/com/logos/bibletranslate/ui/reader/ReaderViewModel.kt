@@ -792,36 +792,6 @@ class ReaderViewModel(
         // These two books are the live-call experiments (no precomputed word data) — gated on
         // *this verse's* own book, not whatever book was last explicitly navigated to, since a
         // continuous scroll can carry the user into/out of either book without a fresh "load".
-        if (verse.bookId == LEVITICUS_BOOK_ID) {
-            val apiKey = ApiKeys.geminiApiKey
-            if (apiKey == null) {
-                _uiState.value = state.copy(
-                    chatBubble = ChatBubbleState(
-                        verseId, clamped, state.targetLanguage,
-                        "No Gemini API key configured for this build.", initialHasData = false,
-                        selectedSingleWord = singleWord, isCondensed = singleWord != null, openSequence = openSeq,
-                    ),
-                )
-                return
-            }
-            val selectedText = clamped.joinToString(" ") { tokens[it] }
-            _uiState.value = state.copy(
-                chatBubble = ChatBubbleState(
-                    verseId, clamped, state.targetLanguage, "Translating…", initialHasData = false, initialIsLoading = true,
-                    selectedSingleWord = singleWord, isCondensed = singleWord != null, openSequence = openSeq,
-                ),
-            )
-            viewModelScope.launch {
-                val cached = liveTranslationCache.get(verse.numericVerseId, state.language, state.targetLanguage, clamped.first, clamped.last)
-                if (cached != null) {
-                    applyInitialResult(myRequestId, Result.success(cached))
-                } else {
-                    runGeminiLiveTranslate(myRequestId, verse, selectedText, apiKey, state.language, state.targetLanguage, clamped)
-                }
-            }
-            return
-        }
-
         if (verse.bookId == EXODUS_BOOK_ID) {
             val apiKey = ApiKeys.translateApiKey
             if (apiKey == null) {
@@ -852,12 +822,34 @@ class ReaderViewModel(
             return
         }
 
+        // All remaining books (everything except Genesis precomputed data and Exodus Google Translate)
+        // use Gemini live translate with verse context — same quality path as Leviticus used to be.
+        val apiKey = ApiKeys.geminiApiKey
+        if (apiKey == null) {
+            _uiState.value = state.copy(
+                chatBubble = ChatBubbleState(
+                    verseId, clamped, state.targetLanguage,
+                    "No Gemini API key configured for this build.", initialHasData = false,
+                    selectedSingleWord = singleWord, isCondensed = singleWord != null, openSequence = openSeq,
+                ),
+            )
+            return
+        }
+        val selectedText = clamped.joinToString(" ") { tokens[it] }
         _uiState.value = state.copy(
             chatBubble = ChatBubbleState(
-                verseId, clamped, state.targetLanguage, "No word-level translation yet", initialHasData = false,
+                verseId, clamped, state.targetLanguage, "Translating…", initialHasData = false, initialIsLoading = true,
                 selectedSingleWord = singleWord, isCondensed = singleWord != null, openSequence = openSeq,
             ),
         )
+        viewModelScope.launch {
+            val cached = liveTranslationCache.get(verse.numericVerseId, state.language, state.targetLanguage, clamped.first, clamped.last)
+            if (cached != null) {
+                applyInitialResult(myRequestId, Result.success(cached))
+            } else {
+                runGeminiLiveTranslate(myRequestId, verse, selectedText, apiKey, state.language, state.targetLanguage, clamped)
+            }
+        }
     }
 
     /** The "direct Gemini calls, non-preprocessed" experiment arm (Leviticus) — one live call per tap, with verse context. */
