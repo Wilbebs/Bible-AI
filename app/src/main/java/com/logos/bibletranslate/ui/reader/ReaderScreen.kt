@@ -611,6 +611,7 @@ fun ReaderScreen(
                         onChipTapped = viewModel::onChipTapped,
                         onResponseWordTapped = viewModel::onResponseWordTapped,
                         onDefinitionWordTapped = viewModel::onDefinitionWordTapped,
+                        onVerseRefTapped = viewModel::onVerseRefTapped,
                         // Pad the top so the bubble's BoxWithConstraints receives the correct
                     // available height — without this the 70% cap is computed against the
                     // full screen and the panel can slide up behind the floating navbar.
@@ -1052,7 +1053,7 @@ private fun CompactReadingLanguagePicker(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                selected.code.uppercase(),
+                selected.translationName,
                 style = MaterialTheme.typography.titleSmall,
                 color = Color.White,
                 maxLines = 1,

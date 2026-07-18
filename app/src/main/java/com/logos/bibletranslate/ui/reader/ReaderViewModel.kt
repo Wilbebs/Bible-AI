@@ -31,7 +31,11 @@ import kotlinx.coroutines.launch
  * context). Genesis is the precomputed comparison point.
  */
 private const val EXODUS_BOOK_ID = 2
-private const val LEVITICUS_BOOK_ID = 3
+
+/** Parses a verse reference string like "John 3:16" or "1 Samuel 2:3-5" into its components. */
+private val VERSE_REF_PARSE_REGEX = Regex(
+    """((?:[123]\s+)?[A-Z][a-z]+(?:\s+(?:of\s+)?[A-Z][a-z]+)?)\s+(\d+):(\d+)"""
+)
 
 /** Last Old Testament book_id in the bundled KJV ordering (Malachi); used to pick the Hebrew vs. Greek chip. */
 private const val LAST_OT_BOOK_ID = 39
@@ -380,6 +384,42 @@ class ReaderViewModel(
      * so chained lookups (define a word, tap a word in *that* definition, and so on) never drift
      * to a different language partway through.
      */
+    /**
+     * Tap on a verse reference hyperlink inside an AI reply (e.g. "John 3:16") — looks the verse
+     * up in the current reading language's DB and injects it as a scripture card in the chat so
+     * the user can read it without leaving the AI window or triggering a fresh navigation.
+     */
+    fun onVerseRefTapped(ref: String) {
+        val state = _uiState.value
+        if (state.chatBubble == null) return
+        viewModelScope.launch {
+            val verseData = lookupVerseRef(ref, state) ?: return@launch
+            val current = _uiState.value.chatBubble ?: return@launch
+            val display = "${verseData.bookName} ${verseData.chapter}:${verseData.verse}\n${verseData.text}"
+            _uiState.value = _uiState.value.copy(
+                chatBubble = current.copy(
+                    messages = current.messages + ChatMessage(
+                        role = ChatRole.ASSISTANT,
+                        text = display,
+                        isVerseCard = true,
+                    ),
+                ),
+            )
+        }
+    }
+
+    /** Parses a verse reference string and looks it up in the current reading language's DB. */
+    private suspend fun lookupVerseRef(ref: String, state: ReaderUiState): VerseData? {
+        val match = VERSE_REF_PARSE_REGEX.find(ref) ?: return null
+        val bookFragment = match.groupValues[1].trim()
+        val chapter = match.groupValues[2].toIntOrNull() ?: return null
+        val verseNum = match.groupValues[3].toIntOrNull() ?: return null
+        val book = state.books.firstOrNull { it.bookName.startsWith(bookFragment, ignoreCase = true) }
+            ?: state.books.firstOrNull { it.bookName.contains(bookFragment, ignoreCase = true) }
+            ?: return null
+        return repository.getVerse(state.language, book.bookId, chapter, verseNum)
+    }
+
     fun onDefinitionWordTapped(word: String) {
         val state = _uiState.value
         val bubble = state.chatBubble ?: return

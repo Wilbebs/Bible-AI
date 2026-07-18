@@ -14,11 +14,15 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -127,12 +131,14 @@ private val FOLLOWUP_SUGGESTIONS_PT = listOf(
     "Aplicação atual",
 )
 
-/** Picks the suggestion pool matching the bubble's current reply language, so the follow-up
- * prompts shown to the user always read in the language they're about to type/ask in. */
+/** Picks the suggestion pool matching the bubble's current reply language. WEB/BBE share the
+ *  English pool; Bíblia Livre shares the Portuguese pool; biblical-language texts fall back to
+ *  English since AI follow-ups for those are most naturally phrased in English. */
 private fun followUpSuggestionsFor(language: BibleLanguage): List<String> = when (language) {
-    BibleLanguage.EN -> FOLLOWUP_SUGGESTIONS_EN
+    BibleLanguage.EN, BibleLanguage.WEB, BibleLanguage.BBE -> FOLLOWUP_SUGGESTIONS_EN
     BibleLanguage.ES -> FOLLOWUP_SUGGESTIONS_ES
-    BibleLanguage.PT -> FOLLOWUP_SUGGESTIONS_PT
+    BibleLanguage.PT, BibleLanguage.PT_LIVRE -> FOLLOWUP_SUGGESTIONS_PT
+    BibleLanguage.HE, BibleLanguage.GR, BibleLanguage.AR, BibleLanguage.LA -> FOLLOWUP_SUGGESTIONS_EN
 }
 
 private const val SUGGESTION_CYCLE_MILLIS = 12_000L
@@ -162,6 +168,7 @@ fun ChatBubble(
     onChipTapped: (String) -> Unit,
     onResponseWordTapped: (String) -> Unit,
     onDefinitionWordTapped: (String) -> Unit,
+    onVerseRefTapped: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val hasConversation = bubble.messages.isNotEmpty()
@@ -178,6 +185,16 @@ fun ChatBubble(
         var userHeightFraction by remember { mutableFloatStateOf(0.70f) }
         val availableHeight = maxHeight
         val maxMessageListHeight = availableHeight * userHeightFraction
+
+        // DraggableState for the handle — startDragImmediately = true bypasses touch slop
+        // so every finger movement from the very first pixel is tracked. Positive delta = down.
+        val draggableState = rememberDraggableState { delta ->
+            val heightPx = with(density) { availableHeight.toPx() }
+            val deltaFrac = -delta / heightPx
+            val newFrac = (userHeightFraction + deltaFrac).coerceIn(0.15f, 0.92f)
+            userHeightFraction = newFrac
+            if (newFrac <= 0.22f) onMinimize()
+        }
 
         // Reset fraction to comfortable reading height whenever the panel is re-expanded.
         LaunchedEffect(bubble.isMinimized) {
@@ -237,42 +254,29 @@ fun ChatBubble(
                     ),
             ) {
                 // ── Drag handle ─────────────────────────────────────────────────
-                // Thin pill centred in a 28dp hit zone. Uses raw awaitEachGesture
-                // rather than detectDragGestures so tracking starts from the very
-                // first pointer move — no touch-slop delay, responds to the lightest tap.
+                // 14 dp strip (half the previous size). draggable() with
+                // startDragImmediately = true means every finger movement is tracked
+                // from pixel zero — no touch-slop wait that made it feel unresponsive.
                 if (!bubble.isCondensed) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(28.dp)
-                            .pointerInput(Unit) {
-                                awaitEachGesture {
-                                    val down = awaitFirstDown(requireUnconsumed = false)
-                                    down.consume()
-                                    var lastY = down.position.y
-                                    do {
-                                        val event = awaitPointerEvent()
-                                        val change = event.changes.firstOrNull() ?: break
-                                        val dy = change.position.y - lastY
-                                        lastY = change.position.y
-                                        change.consume()
-                                        val deltaDp = with(density) { dy.toDp() }
-                                        val deltaFrac = -(deltaDp.value / availableHeight.value)
-                                        userHeightFraction = (userHeightFraction + deltaFrac).coerceIn(0.15f, 0.80f)
-                                        if (userHeightFraction <= 0.22f) onMinimize()
-                                    } while (event.changes.any { it.pressed })
-                                }
-                            },
+                            .height(14.dp)
+                            .draggable(
+                                state = draggableState,
+                                orientation = Orientation.Vertical,
+                                startDragImmediately = true,
+                            ),
                         contentAlignment = Alignment.Center,
                     ) {
                         Box(
                             modifier = Modifier
-                                .width(40.dp)
+                                .width(44.dp)
                                 .height(4.dp)
                                 .clip(RoundedCornerShape(2.dp))
                                 .background(
-                                    if (Glass.isDarkMode) Color.White.copy(alpha = 0.35f)
-                                    else Color.Black.copy(alpha = 0.22f),
+                                    if (Glass.isDarkMode) Color.White.copy(alpha = 0.40f)
+                                    else Color.Black.copy(alpha = 0.26f),
                                 ),
                         )
                     }
@@ -369,7 +373,7 @@ fun ChatBubble(
                             .heightIn(max = maxMessageListHeight)
                             .padding(top = 8.dp),
                     ) {
-                        items(bubble.messages) { message -> ChatMessageRow(message, onResponseWordTapped) }
+                        items(bubble.messages) { message -> ChatMessageRow(message, onResponseWordTapped, onVerseRefTapped) }
                         if (bubble.isSendingFollowUp) {
                             item { TypingIndicatorRow() }
                         }
@@ -585,15 +589,40 @@ private fun LanguageDropdown(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ChatMessageRow(message: ChatMessage, onResponseWordTapped: (String) -> Unit) {
+private fun ChatMessageRow(
+    message: ChatMessage,
+    onResponseWordTapped: (String) -> Unit,
+    onVerseRefTapped: (String) -> Unit,
+) {
+    // Verse cards are injected by tapping a hyperlinked verse reference — rendered as a
+    // scripture excerpt card rather than a conversation turn so they stay visually distinct.
+    if (message.isVerseCard) {
+        Surface(
+            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        ) {
+            Text(
+                text = message.text,
+                style = MaterialTheme.typography.bodyMedium,
+                fontStyle = FontStyle.Italic,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+        }
+        return
+    }
     val label = if (message.role == ChatRole.USER) "You" else "Assistant"
     Column(Modifier.padding(vertical = 4.dp)) {
         Text(label, style = MaterialTheme.typography.labelSmall, fontStyle = FontStyle.Italic)
         if (message.role == ChatRole.ASSISTANT && !message.isError) {
-            TappableWords(
+            // VerseLinkedText renders verse refs (e.g. "John 3:16") as tappable hyperlinks
+            // that show the verse inline when tapped; all other words stay individually
+            // tappable for the word-definition lookup — same as TappableWords.
+            VerseLinkedText(
                 text = message.text,
                 style = MaterialTheme.typography.bodyMedium,
                 onWordTapped = onResponseWordTapped,
+                onVerseRefTapped = onVerseRefTapped,
                 animate = true,
             )
         } else if (message.isError) {
@@ -613,11 +642,96 @@ private fun ChatMessageRow(message: ChatMessage, onResponseWordTapped: (String) 
     }
 }
 
+/** Matches Bible verse references in AI text: "John 3:16", "1 Samuel 2:3", "Song of Songs 1:2-4", etc. */
+private val VERSE_IN_TEXT_REGEX = Regex(
+    """(?:[123]\s+)?[A-Z][a-z]+(?:\s+(?:of\s+)?[A-Z][a-z]+)?\s+\d+:\d+(?:[-–]\d+)?"""
+)
+
+/**
+ * Renders AI text with two tappability layers:
+ * • Detected verse references (e.g. "John 3:16") → primary-colored + underlined → [onVerseRefTapped].
+ * • All other words → [onWordTapped] for the word-definition drill-down.
+ * Supports the same optional typewriter reveal as [TappableWords] when [animate] is set.
+ */
+@Composable
+private fun VerseLinkedText(
+    text: String,
+    style: androidx.compose.ui.text.TextStyle,
+    fontWeight: FontWeight? = null,
+    onWordTapped: (String) -> Unit,
+    onVerseRefTapped: (String) -> Unit,
+    animate: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    val linkColor = MaterialTheme.colorScheme.primary
+    val fullAnnotated = remember(text, linkColor) {
+        buildAnnotatedString {
+            var last = 0
+            VERSE_IN_TEXT_REGEX.findAll(text).forEach { match ->
+                if (match.range.first > last) append(text.substring(last, match.range.first))
+                pushStringAnnotation("verse", match.value)
+                withStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)) {
+                    append(match.value)
+                }
+                pop()
+                last = match.range.last + 1
+            }
+            if (last < text.length) append(text.substring(last))
+        }
+    }
+
+    val visibleChars = rememberTypewriterProgress(
+        text = text,
+        totalUnits = text.length,
+        unitsPerTick = 5,
+        tickMillis = 16,
+        animate = animate,
+    )
+
+    val displayedAnnotated = remember(visibleChars, fullAnnotated) {
+        if (visibleChars >= fullAnnotated.length) fullAnnotated
+        else buildAnnotatedString {
+            append(fullAnnotated, 0, visibleChars.coerceAtMost(fullAnnotated.length))
+        }
+    }
+
+    var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val mergedStyle = if (fontWeight != null) style.copy(fontWeight = fontWeight) else style
+
+    Text(
+        text = displayedAnnotated,
+        style = mergedStyle,
+        onTextLayout = { layoutResult = it },
+        modifier = modifier.pointerInput(displayedAnnotated) {
+            detectTapGestures { offset ->
+                val layout = layoutResult ?: return@detectTapGestures
+                val charPos = layout.getOffsetForPosition(offset)
+                    .coerceIn(0, (displayedAnnotated.length - 1).coerceAtLeast(0))
+                val verseHit = displayedAnnotated
+                    .getStringAnnotations("verse", charPos, charPos)
+                    .firstOrNull()
+                if (verseHit != null) {
+                    onVerseRefTapped(verseHit.item)
+                } else {
+                    val t = displayedAnnotated.text
+                    if (t.isEmpty()) return@detectTapGestures
+                    var start = charPos
+                    while (start > 0 && !t[start - 1].isWhitespace()) start--
+                    var end = charPos
+                    while (end < t.length && !t[end].isWhitespace()) end++
+                    val word = t.substring(start, end)
+                        .trim { it.isWhitespace() || it in setOf(',', '.', ';', ':', '!', '?', '"', '\'', '\u201C', '\u201D', '\u00A1', '\u00BF', '(', ')') }
+                    if (word.isNotEmpty()) onWordTapped(word)
+                }
+            }
+        },
+    )
+}
+
 /**
  * Renders text as individually tappable words — tapping one a user doesn't understand prefills
- * a "What does X mean in this verse?" follow-up question (tap-word-autofill clarification).
- * Used for both the initial translation and assistant chat replies. When [animate] is set, the
- * words stream in one-by-one (a Gemini-style typewriter reveal) instead of appearing all at once.
+ * a word-definition lookup. Used for the initial translation and word-info definitions.
+ * When [animate] is set, words stream in one-by-one (Gemini-style typewriter reveal).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
