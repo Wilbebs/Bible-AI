@@ -86,6 +86,51 @@ they're the reference/comparison points, not mistakes to "fix."
 
 ---
 
+## 3a. Additional Bible text data (built, not yet wired into the UI)
+
+`scripts/build_bible_dbs.mjs` now fetches 10 texts total (all from the
+getbible v2 API, all confirmed license-checked, not just assumed PD). The
+original three (`kjv.db`, `rv1909.db`, `almeida1911.db`) are unchanged and
+still power the reading/translate-to language pickers as before. The 7 new
+`.db` files exist in `assets/bibles/` but **nothing in the Kotlin code
+reads them yet** — that wiring (extending the language picker, deciding how
+original-language texts interact with tap-translate/chat) is left for
+whoever's driving the UI next (Replit), since `BibleLanguage` and the reader
+UI are actively being redesigned there and this file didn't want to fight
+that.
+
+| File | Text | Language | License |
+|---|---|---|---|
+| `web.db` | World English Bible | English (modern) | Public Domain |
+| `bbe.db` | Bible in Basic English | English (~1000-word vocab) | Public Domain |
+| `wlc_hebrew.db` | Westminster Leningrad Codex | Hebrew (OT only) | Public Domain |
+| `tischendorf_greek.db` | Tischendorf 8th Ed. | Greek (NT only) | Public Domain |
+| `peshitta_aramaic.db` | Peshitta | Aramaic/Syriac (NT only) | Public Domain |
+| `vulgate_latin.db` | Clementine Vulgate | Latin (full OT+NT) | Public Domain |
+| `biblia_livre_pt.db` | Bíblia Livre | Portuguese (modern) | **CC BY 3.0 Brazil — not PD**, deliberate exception (user-approved), commercial use OK, attribution required |
+
+**Why no simpler Spanish:** every modern easy-Spanish translation found
+(TLA, PDT, NVI, etc.) is copyrighted by a Bible society. The only
+public-domain Spanish texts available are old/formal register (1858 NT-only,
+1569) — no genuine upgrade over RV1909, so none was added.
+
+**⚠️ Data-integrity gotcha for whoever wires this in:** the app's existing
+cross-translation logic assumes all Bibles share the same 66-book
+`book_id` numbering (Genesis=1 ... Revelation=66) so the same
+`(book_id, chapter, verse)` lands on the same verse across languages.
+`vulgate_latin.db` has **73 books** (Catholic canon, includes the
+Apocrypha/Deuterocanon) — its `book_id`s will diverge from every other
+bundled Bible partway through the Old Testament. Don't use Vulgate as a
+lookup target in the existing verse-alignment code without either trimming
+it to the 66-book subset first or building a separate mapping layer.
+`wlc_hebrew.db` (39 books, OT only) and `tischendorf_greek.db` /
+`peshitta_aramaic.db` (27 books, NT only) are each internally consistent
+subsets of the standard 66 and don't have this problem — they just don't
+cover the *other* testament, which is expected (there's no Hebrew NT or
+Greek/Aramaic OT to bundle).
+
+---
+
 ## 4. Architecture
 
 **Stack:** Kotlin, Jetpack Compose (Material 3), MVVM (`ReaderViewModel` +
