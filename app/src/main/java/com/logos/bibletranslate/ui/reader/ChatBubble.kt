@@ -188,12 +188,18 @@ fun ChatBubble(
 
         // DraggableState for the handle — startDragImmediately = true bypasses touch slop
         // so every finger movement from the very first pixel is tracked. Positive delta = down.
+        // Dragging up expands, dragging down condenses. When the panel is currently minimized,
+        // dragging up past the threshold re-expands it; when expanded, dragging below the
+        // threshold minimizes it. This is the same single handle used for both gestures.
         val draggableState = rememberDraggableState { delta ->
             val heightPx = with(density) { availableHeight.toPx() }
             val deltaFrac = -delta / heightPx
             val newFrac = (userHeightFraction + deltaFrac).coerceIn(0.15f, 0.92f)
             userHeightFraction = newFrac
-            if (newFrac <= 0.22f) onMinimize()
+            when {
+                bubble.isMinimized && newFrac >= 0.40f -> onExpand()
+                !bubble.isMinimized && newFrac <= 0.22f -> onMinimize()
+            }
         }
 
         // Reset fraction to comfortable reading height whenever the panel is re-expanded.
@@ -261,6 +267,7 @@ fun ChatBubble(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .padding(top = 3.dp)
                             .height(14.dp)
                             .draggable(
                                 state = draggableState,
@@ -295,7 +302,10 @@ fun ChatBubble(
                         modifier = Modifier.weight(1f),
                     )
                     LanguageDropdown(
-                        options = BibleLanguage.entries,
+                        // The AI window is a *language* switcher, not a Bible-version switcher.
+                        // Show only one entry per language code; the reading-language version
+                        // picker is the navbar dropdown above the scripture text.
+                        options = BibleLanguage.entries.distinctBy { it.code },
                         selected = bubble.bubbleTargetLanguage,
                         onSelected = onLanguageChanged,
                     )
