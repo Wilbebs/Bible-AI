@@ -31,6 +31,16 @@ private val WORD_INFO_RESPONSE_SCHEMA = JSONObject()
     )
     .put("required", JSONArray().put("pronunciation").put("definition").put("translation"))
 
+private val PARTNER_JUDGMENT_SCHEMA = JSONObject()
+    .put("type", "OBJECT")
+    .put(
+        "properties",
+        JSONObject()
+            .put("kind", JSONObject().put("type", "STRING"))
+            .put("reply", JSONObject().put("type", "STRING")),
+    )
+    .put("required", JSONArray().put("kind").put("reply"))
+
 /**
  * Scoped mini-chatbot for a single selected verse/word (addendum §2). Every
  * call is a live Gemini request carrying the verse text, the running
@@ -149,6 +159,53 @@ class VerseChatClient {
         Only gently redirect if the question is truly unrelated to the Bible or faith (e.g. sports, cooking, current events). Even then, keep it warm — one sentence, then offer to continue Bible study.
         Keep answers short and plain — 1–3 sentences unless the user explicitly asks for more depth.
     """.trimIndent()
+
+    /**
+     * Compares [spokenText] (the user's speech transcript) against [expectedVerseText] and
+     * returns a structured judgment: good read → advance; bad read → gentle retry prompt;
+     * question/statement → conversational answer. The reply is already in [sourceLangName].
+     *
+     * This is the only Gemini call partner reading makes per user turn — kept very brief so
+     * the round-trip feels fast between verses.
+     */
+    suspend fun judgePartnerReading(
+        apiKey: String,
+        expectedVerseText: String,
+        sourceLangName: String,
+        spokenText: String,
+    ): Result<PartnerReadingJudgment> {
+        val system = """
+            You are a gentle Bible reading companion running a Partner Reading exercise.
+            The user was asked to read this verse aloud in $sourceLangName:
+            "$expectedVerseText"
+            
+            Their speech was transcribed as:
+            "$spokenText"
+            
+            Classify this into exactly one of:
+            - GOOD_READ  : They read the verse correctly, or close enough (minor word slips are fine)
+            - BAD_READ   : Most of the verse is missing, badly garbled, or the transcript is clearly wrong
+            - QUESTION_OR_STATEMENT : They said something unrelated to reading the verse (a question, a comment, etc.)
+            
+            Set "kind" to one of those three exact strings.
+            Set "reply" to a response in $sourceLangName:
+            - GOOD_READ           → 1 very short warm affirmation (max 8 words — they want to keep reading)
+            - BAD_READ            → 1-2 gentle, encouraging sentences
+            - QUESTION_OR_STATEMENT → a concise, helpful answer staying focused on the Bible passage
+        """.trimIndent()
+        return callGemini(apiKey, system, emptyList(), spokenText, PARTNER_JUDGMENT_SCHEMA)
+            .mapCatching { json ->
+                val obj = JSONObject(json)
+                val kindStr = obj.optString("kind", "GOOD_READ")
+                val reply = obj.optString("reply", "")
+                val kind = when (kindStr) {
+                    "BAD_READ" -> PartnerJudgmentKind.BAD_READ
+                    "QUESTION_OR_STATEMENT" -> PartnerJudgmentKind.QUESTION_OR_STATEMENT
+                    else -> PartnerJudgmentKind.GOOD_READ
+                }
+                PartnerReadingJudgment(kind, reply)
+            }
+    }
 
     private suspend fun callGemini(
         apiKey: String,

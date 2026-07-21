@@ -83,6 +83,12 @@ fun VerseRow(
     isHovered: Boolean = false,
     /** Whether this verse is bookmarked — applies a soft accent-color wash behind the row. */
     isBookmarked: Boolean = false,
+    /**
+     * Partner reading highlight: true = AI's turn (first accent color), false = user's turn
+     * (last accent color), null = not the currently active partner verse.
+     * Overrides the bookmark background when set.
+     */
+    isPartnerHighlightIsAi: Boolean? = null,
     /** Called when the verse number is tapped — parent decides toggle logic. */
     onVerseHoverToggle: () -> Unit = {},
     /** Called when the speaker icon is tapped — parent reads the verse text aloud. */
@@ -115,8 +121,14 @@ fun VerseRow(
     val lockedState = rememberUpdatedState(isLocked)
     val haptics = LocalHapticFeedback.current
 
-    // Bookmark: soft accent-color wash behind the whole row, matching the user's chosen theme.
-    val rowBackground = if (isBookmarked) Glass.skyBlue.copy(alpha = 0.15f) else Color.Transparent
+    // Partner reading highlight takes precedence; uses first/last accent colors so it always
+    // matches whichever marble is selected. Bookmark wash shows only when partner mode is off.
+    val rowBackground = when {
+        isPartnerHighlightIsAi == true  -> Glass.skyBlue.copy(alpha = 0.22f)
+        isPartnerHighlightIsAi == false -> Glass.deepBlue.copy(alpha = 0.22f)
+        isBookmarked                    -> Glass.skyBlue.copy(alpha = 0.15f)
+        else                            -> Color.Transparent
+    }
 
     Row(
         modifier = modifier

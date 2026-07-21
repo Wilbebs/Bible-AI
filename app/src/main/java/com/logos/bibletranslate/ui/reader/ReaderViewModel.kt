@@ -6,6 +6,10 @@ import androidx.lifecycle.viewModelScope
 import com.logos.bibletranslate.data.ApiKeys
 import com.logos.bibletranslate.data.VerseTextToSpeech
 import com.logos.bibletranslate.data.BibleLanguage
+import com.logos.bibletranslate.data.PartnerJudgmentKind
+import com.logos.bibletranslate.data.PartnerSpeechRecognizer
+import com.logos.bibletranslate.data.PartnerTurn
+import kotlinx.coroutines.Dispatchers
 import com.logos.bibletranslate.data.BibleRepository
 import com.logos.bibletranslate.data.BookInfo
 import com.logos.bibletranslate.data.ChatMessage
@@ -112,6 +116,20 @@ data class ChatBubbleState(
     val isMinimized: Boolean = false,
     /** Increments every time a *new* bubble opens — drives which follow-up suggestion shows (once, not on a timer). */
     val openSequence: Int = 0,
+
+    // ── Partner Reading mode ─────────────────────────────────────────────────
+    /** True while the partner-reading view is shown (toggle at the header top-left). */
+    val isPartnerMode: Boolean = false,
+    /** Current state-machine step of the turn loop. */
+    val partnerTurn: PartnerTurn = PartnerTurn.AI_SPEAKING,
+    /** Index into [ReaderUiState.verses] pointing at whichever verse is active this turn. */
+    val partnerVerseIndex: Int = 0,
+    /** Label shown in the partner body header ("Genesis 1:2"). */
+    val partnerVerseLabel: String = "",
+    /** Full text of the active verse — shown to the user during their turn. */
+    val partnerVerseText: String = "",
+    /** Running transcript of questions/answers exchanged during the reading session. */
+    val partnerMessages: List<com.logos.bibletranslate.data.ChatMessage> = emptyList(),
 )
 
 data class VerseTranslationEntry(val language: BibleLanguage, val text: String?)
@@ -168,6 +186,10 @@ data class ReaderUiState(
     val hoveredVerseId: Long? = null,
     /** Verses the user has bookmarked this session — UI-only until a DB layer is added. */
     val bookmarkedVerseIds: Set<Long> = emptySet(),
+    /** Which verse is currently highlighted for partner reading (null when mode is off). */
+    val partnerHighlightVerseId: Long? = null,
+    /** True = AI's verse (first accent color); false = user's verse (last accent color). */
+    val partnerHighlightIsAi: Boolean? = null,
 )
 
 class ReaderViewModel(
@@ -185,6 +207,10 @@ class ReaderViewModel(
 
     /** TTS engine — lazily initialised from the composable via [initTts]; released in [onCleared]. */
     private var tts: VerseTextToSpeech? = null
+    /** Speech recogniser for partner reading — created once alongside TTS. */
+    private var recognizer: PartnerSpeechRecognizer? = null
+    /** Application context stored during initTts — needed for speech recognition. */
+    private var appContext: Context? = null
 
     /** Guards against a stale live-call result overwriting a newer selection. */
     private var liveCallRequestId = 0
@@ -410,7 +436,12 @@ class ReaderViewModel(
 
     /** Call once from the composable (LaunchedEffect) to hand the engine an application context. */
     fun initTts(context: Context) {
-        if (tts == null) tts = VerseTextToSpeech(context.applicationContext)
+        if (tts == null) {
+            val appCtx = context.applicationContext
+            appContext = appCtx
+            tts = VerseTextToSpeech(appCtx)
+            recognizer = PartnerSpeechRecognizer()
+        }
     }
 
     /** Tapping the verse number shows/hides the action icons for that verse.
@@ -434,8 +465,205 @@ class ReaderViewModel(
     /** Reads any AI-generated text aloud (initial translation, chat reply, word definition). */
     fun onSpeakAiText(text: String, langCode: String) { tts?.speak(text, langCode) }
 
+    /**
+     * Tapping the mic button in the regular chat input row — captures a single utterance
+     * and fills the follow-up input field with the transcript so the user can review and send.
+     * No-op when partner mode is active (its own mic handles that path).
+     */
+    fun onChatMicTapped() {
+        val state = _uiState.value
+        val bubble = state.chatBubble ?: return
+        if (bubble.isPartnerMode) return
+        viewModelScope.launch(Dispatchers.Main) {
+            val ctx = appContext ?: return@launch
+            val langTag = localeTagFor(state.language.code)
+            recognizer?.listenOnce(ctx, langTag)?.onSuccess { transcript ->
+                if (transcript.isNotBlank()) {
+                    onFollowUpInputChanged(transcript)
+                }
+            }
+        }
+    }
+
     /** Stop any in-progress TTS playback (e.g. when the bubble closes or language changes). */
     fun onStopSpeaking() { tts?.stop() }
+
+    // ── Partner Reading orchestration ────────────────────────────────────────
+
+    /** Enter partner reading mode — starts at the verse the current bubble is anchored to. */
+    fun onEnterPartnerMode() {
+        val state = _uiState.value
+        val bubble = state.chatBubble ?: return
+        val verses = state.verses
+        // Find the bubble's verse in the list, then step back to the nearest even-indexed
+        // position so the session always opens with an AI verse (index 0, 2, 4 …).
+        val anchorIdx = verses.indexOfFirst { it.numericVerseId == bubble.verseId }
+            .coerceAtLeast(0)
+        val aiIdx = if (anchorIdx % 2 == 0) anchorIdx else (anchorIdx - 1).coerceAtLeast(0)
+        _uiState.value = state.copy(
+            chatBubble = bubble.copy(
+                isPartnerMode = true,
+                partnerMessages = emptyList(),
+            ),
+        )
+        speakAiPartnerVerse(aiIdx)
+    }
+
+    /** Exit partner reading mode, clear all partner highlights. */
+    fun onExitPartnerMode() {
+        tts?.stop()
+        val bubble = _uiState.value.chatBubble ?: return
+        _uiState.value = _uiState.value.copy(
+            chatBubble = bubble.copy(isPartnerMode = false),
+            partnerHighlightVerseId = null,
+            partnerHighlightIsAi = null,
+        )
+    }
+
+    /** Tap the mic button during the user's turn — starts SpeechRecognizer on the main thread. */
+    fun onPartnerMicTapped() {
+        val state = _uiState.value
+        val bubble = state.chatBubble ?: return
+        if (bubble.partnerTurn != PartnerTurn.AWAITING_USER) return
+        viewModelScope.launch(Dispatchers.Main) {
+            setPartnerTurn(PartnerTurn.LISTENING)
+            val ctx = appContext ?: return@launch
+            val langTag = localeTagFor(state.language.code)
+            val result = recognizer?.listenOnce(ctx, langTag) ?: return@launch
+            result.fold(
+                onSuccess = { transcript -> handlePartnerTranscript(transcript) },
+                onFailure = { setPartnerTurn(PartnerTurn.AWAITING_USER) },
+            )
+        }
+    }
+
+    private suspend fun handlePartnerTranscript(transcript: String) {
+        val state = _uiState.value
+        val bubble = state.chatBubble ?: return
+        val verses = state.verses
+        val userVerseIndex = bubble.partnerVerseIndex
+        val expectedText = verses.getOrNull(userVerseIndex)?.text ?: return
+        val langName = state.language.displayName
+
+        setPartnerTurn(PartnerTurn.AI_RESPONDING)
+
+        val apiKey = ApiKeys.geminiApiKey ?: return
+        val judgment = verseChatClient.judgePartnerReading(apiKey, expectedText, langName, transcript)
+
+        judgment.fold(
+            onSuccess = { j ->
+                when (j.kind) {
+                    PartnerJudgmentKind.GOOD_READ -> {
+                        // Brief affirmation (≤8 words), then immediately advance to next AI verse
+                        val nextAiIdx = userVerseIndex + 1
+                        if (j.reply.isNotBlank()) {
+                            tts?.speak(j.reply, state.language.code) {
+                                viewModelScope.launch(Dispatchers.Main) {
+                                    advanceToAiVerse(nextAiIdx)
+                                }
+                            }
+                        } else {
+                            advanceToAiVerse(nextAiIdx)
+                        }
+                    }
+                    PartnerJudgmentKind.BAD_READ -> {
+                        // Gentle note, then return to AWAITING_USER for a retry on the same verse
+                        tts?.speak(j.reply, state.language.code) {
+                            viewModelScope.launch(Dispatchers.Main) {
+                                setPartnerTurn(PartnerTurn.AWAITING_USER)
+                            }
+                        } ?: setPartnerTurn(PartnerTurn.AWAITING_USER)
+                    }
+                    PartnerJudgmentKind.QUESTION_OR_STATEMENT -> {
+                        // Append Q&A to partnerMessages, speak the answer, return to AWAITING_USER
+                        val cur = _uiState.value.chatBubble ?: return
+                        val updatedMsgs = cur.partnerMessages +
+                            com.logos.bibletranslate.data.ChatMessage(
+                                role = com.logos.bibletranslate.data.ChatRole.USER, text = transcript,
+                            ) +
+                            com.logos.bibletranslate.data.ChatMessage(
+                                role = com.logos.bibletranslate.data.ChatRole.ASSISTANT, text = j.reply,
+                            )
+                        _uiState.value = _uiState.value.copy(
+                            chatBubble = (_uiState.value.chatBubble ?: return).copy(
+                                partnerMessages = updatedMsgs,
+                                partnerTurn = PartnerTurn.AI_RESPONDING,
+                            ),
+                        )
+                        tts?.speak(j.reply, state.language.code) {
+                            viewModelScope.launch(Dispatchers.Main) {
+                                // Return to AWAITING_USER — no prompt; user will tap mic when ready
+                                setPartnerTurn(PartnerTurn.AWAITING_USER)
+                            }
+                        } ?: setPartnerTurn(PartnerTurn.AWAITING_USER)
+                    }
+                }
+            },
+            onFailure = { setPartnerTurn(PartnerTurn.AWAITING_USER) },
+        )
+    }
+
+    private fun advanceToAiVerse(aiIdx: Int) {
+        val verses = _uiState.value.verses
+        if (aiIdx >= verses.size) {
+            onExitPartnerMode()
+            return
+        }
+        speakAiPartnerVerse(aiIdx)
+    }
+
+    private fun speakAiPartnerVerse(aiIdx: Int) {
+        val state = _uiState.value
+        val verses = state.verses
+        val aiVerse = verses.getOrNull(aiIdx) ?: run { onExitPartnerMode(); return }
+        val bubble = state.chatBubble ?: return
+        _uiState.value = state.copy(
+            chatBubble = bubble.copy(
+                partnerTurn = PartnerTurn.AI_SPEAKING,
+                partnerVerseIndex = aiIdx,
+                partnerVerseLabel = "${aiVerse.bookName} ${aiVerse.chapter}:${aiVerse.verse}",
+                partnerVerseText = aiVerse.text,
+            ),
+            partnerHighlightVerseId = aiVerse.numericVerseId,
+            partnerHighlightIsAi = true,
+        )
+        tts?.speak(aiVerse.text, state.language.code) {
+            viewModelScope.launch(Dispatchers.Main) {
+                val userIdx = aiIdx + 1
+                val userVerse = _uiState.value.verses.getOrNull(userIdx)
+                if (userVerse == null) { onExitPartnerMode(); return@launch }
+                val cur = _uiState.value.chatBubble ?: return@launch
+                _uiState.value = _uiState.value.copy(
+                    chatBubble = cur.copy(
+                        partnerTurn = PartnerTurn.AWAITING_USER,
+                        partnerVerseIndex = userIdx,
+                        partnerVerseLabel = "${userVerse.bookName} ${userVerse.chapter}:${userVerse.verse}",
+                        partnerVerseText = userVerse.text,
+                    ),
+                    partnerHighlightVerseId = userVerse.numericVerseId,
+                    partnerHighlightIsAi = false,
+                )
+            }
+        }
+    }
+
+    private fun setPartnerTurn(turn: PartnerTurn) {
+        val bubble = _uiState.value.chatBubble ?: return
+        _uiState.value = _uiState.value.copy(
+            chatBubble = bubble.copy(partnerTurn = turn),
+        )
+    }
+
+    /** BCP-47 tag that matches the reading language — used for SpeechRecognizer locale. */
+    private fun localeTagFor(code: String) = when (code) {
+        "en" -> "en-US"
+        "es" -> "es-ES"
+        "pt" -> "pt-BR"
+        "he" -> "iw-IL"
+        "el" -> "el-GR"
+        "la" -> "la"
+        else -> "en-US"
+    }
 
     override fun onCleared() {
         super.onCleared()

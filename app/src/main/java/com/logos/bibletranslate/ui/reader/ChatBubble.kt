@@ -1,10 +1,22 @@
 package com.logos.bibletranslate.ui.reader
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -19,7 +31,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.style.TextDecoration
@@ -40,6 +51,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -65,8 +78,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
+import com.logos.bibletranslate.data.ChatRole
+import com.logos.bibletranslate.data.PartnerTurn
+import com.logos.bibletranslate.ui.theme.Glass
+import kotlin.math.PI
+import kotlin.math.sin
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
@@ -77,9 +98,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.logos.bibletranslate.data.BibleLanguage
 import com.logos.bibletranslate.data.ChatMessage
-import com.logos.bibletranslate.data.ChatRole
 import com.logos.bibletranslate.data.VerseTokenizer
-import com.logos.bibletranslate.ui.theme.Glass
 import com.logos.bibletranslate.ui.theme.Sparkle
 import com.logos.bibletranslate.ui.theme.geminiGlowBorder
 import com.logos.bibletranslate.ui.theme.rememberTypewriterProgress
@@ -172,6 +191,14 @@ fun ChatBubble(
     onVerseRefTapped: (String) -> Unit = {},
     /** Reads any AI text aloud — routed to the ViewModel's TTS engine. */
     onSpeakAiText: (text: String, langCode: String) -> Unit = { _, _ -> },
+    /** Enter partner reading mode (toggle at header top-left). */
+    onEnterPartnerMode: () -> Unit = {},
+    /** Exit partner reading mode. */
+    onExitPartnerMode: () -> Unit = {},
+    /** Tap the mic during the user's reading turn (partner mode). */
+    onPartnerMicTapped: () -> Unit = {},
+    /** Tap the mic in the regular chat input row for free-form voice questions. */
+    onChatMicTapped: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val hasConversation = bubble.messages.isNotEmpty()
@@ -296,8 +323,22 @@ fun ChatBubble(
                     CondensedWordRow(bubble, onDefine, onClose)
                     return@Column
                 }
-                // Sticky header: sparkle + verse label, language dropdown, close/delete.
+                // Sticky header: partner toggle + sparkle + verse label, language dropdown, close/delete.
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Partner reading mode toggle — top-left so it's the first control seen.
+                    // Tinted with the first accent color (Glass.skyBlue) when active.
+                    IconButton(
+                        onClick = { if (bubble.isPartnerMode) onExitPartnerMode() else onEnterPartnerMode() },
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.RecordVoiceOver,
+                            contentDescription = if (bubble.isPartnerMode) "Exit partner reading" else "Start partner reading",
+                            modifier = Modifier.size(17.dp),
+                            tint = if (bubble.isPartnerMode) com.logos.bibletranslate.ui.theme.Glass.skyBlue
+                                   else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
+                        )
+                    }
                     Sparkle(size = 14.dp, modifier = Modifier.padding(end = 6.dp))
                     Text(
                         verseLabel,
@@ -331,6 +372,17 @@ fun ChatBubble(
                 }
 
                 Spacer(Modifier.padding(top = 6.dp))
+
+                // Partner reading mode body — uses the same return@Column pattern as the
+                // condensed/minimised states so the study content below is skipped entirely.
+                if (bubble.isPartnerMode) {
+                    PartnerReadingBody(
+                        bubble = bubble,
+                        onMicTapped = onPartnerMicTapped,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    return@Column
+                }
 
                 // Single-word focus: bolded/larger, with pronunciation + a real definition,
                 // shown up top regardless of whether it came from the verse text or a reply.
@@ -502,6 +554,21 @@ fun ChatBubble(
                         Modifier.padding(top = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        // Mic button: taps fill the input with a speech transcript via the
+                        // ViewModel's speech recognizer (free-form voice input, not partner mode).
+                        IconButton(
+                            onClick = onChatMicTapped,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .padding(end = 4.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Mic,
+                                contentDescription = "Voice input",
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            )
+                        }
                         // Pill-shaped glass input with a slow, static (non-rotating) sky-blue/
                         // deep-blue pulse around the ring — the "Gemini is ready" affordance.
                         TextField(
@@ -955,5 +1022,196 @@ private fun TypingIndicatorRow() {
         CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
         Spacer(Modifier.width(8.dp))
         Text("Thinking…", style = MaterialTheme.typography.bodySmall, fontStyle = FontStyle.Italic)
+    }
+}
+
+// ── Partner Reading body ─────────────────────────────────────────────────────
+
+/**
+ * The panel body shown while partner reading mode is active.
+ * Replaces the study content (word info, messages, input) for the duration of the session.
+ * Colors automatically follow the selected marble accent: AI turn = [Glass.skyBlue] (first),
+ * user turn = [Glass.deepBlue] (last).
+ */
+@Composable
+private fun PartnerReadingBody(
+    bubble: ChatBubbleState,
+    onMicTapped: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val isAiTurn = bubble.partnerTurn == PartnerTurn.AI_SPEAKING ||
+                   bubble.partnerTurn == PartnerTurn.AI_RESPONDING
+    val isUserTurn = bubble.partnerTurn == PartnerTurn.AWAITING_USER
+    val isListening = bubble.partnerTurn == PartnerTurn.LISTENING
+    // Listening uses the sky-blue "AI" color — the app is actively processing audio.
+    val turnColor = if (isUserTurn) Glass.deepBlue else Glass.skyBlue
+    val isWaveActive = !isUserTurn   // bars animate while AI speaks / recogniser is capturing
+
+    Column(
+        modifier = modifier.padding(vertical = 10.dp, horizontal = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        // Verse reference (e.g. "Genesis 1:2")
+        if (bubble.partnerVerseLabel.isNotBlank()) {
+            Text(
+                text = bubble.partnerVerseLabel,
+                style = MaterialTheme.typography.labelMedium,
+                color = turnColor,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+        }
+
+        // Turn label — compact so it doesn't crowd the waveform
+        Text(
+            text = when (bubble.partnerTurn) {
+                PartnerTurn.AI_SPEAKING    -> "Reading aloud…"
+                PartnerTurn.AWAITING_USER  -> "Your turn"
+                PartnerTurn.LISTENING      -> "Listening…"
+                PartnerTurn.AI_RESPONDING  -> "Thinking…"
+            },
+            style = MaterialTheme.typography.titleSmall,
+            color = turnColor,
+            modifier = Modifier.padding(bottom = 10.dp),
+        )
+
+        // Animated waveform — 5 sine-driven bars; static when AWAITING_USER
+        PartnerWaveform(
+            isActive = isWaveActive,
+            tint = turnColor,
+            modifier = Modifier
+                .fillMaxWidth(0.52f)
+                .height(46.dp)
+                .padding(bottom = 10.dp),
+        )
+
+        // Verse text: shown during the user's turn as a reading cue.
+        // Not shown while AI reads (it's on the main scroll already) or while thinking.
+        if ((isUserTurn || isListening) && bubble.partnerVerseText.isNotBlank()) {
+            Text(
+                text = bubble.partnerVerseText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.78f),
+                maxLines = 5,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            )
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        // Pulsing mic button — only shown when waiting for the user to speak.
+        // The user taps it themselves when ready; we never prompt them verbally.
+        AnimatedVisibility(
+            visible = isUserTurn,
+            enter = fadeIn(tween(250)),
+            exit = fadeOut(tween(150)),
+        ) {
+            val pulseTransition = rememberInfiniteTransition(label = "micPulse")
+            val pulseAlpha by pulseTransition.animateFloat(
+                initialValue = 0.10f,
+                targetValue = 0.27f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(durationMillis = 900, easing = LinearEasing),
+                    repeatMode = RepeatMode.Reverse,
+                ),
+                label = "micPulseAlpha",
+            )
+            Box(contentAlignment = Alignment.Center) {
+                // Outer glow ring
+                Box(
+                    modifier = Modifier
+                        .size(70.dp)
+                        .background(Glass.deepBlue.copy(alpha = pulseAlpha), CircleShape),
+                )
+                // Tappable inner circle
+                Box(
+                    modifier = Modifier
+                        .size(52.dp)
+                        .background(Glass.deepBlue.copy(alpha = 0.18f), CircleShape)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onMicTapped,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Mic,
+                        contentDescription = "Tap to read your verse",
+                        modifier = Modifier.size(26.dp),
+                        tint = Glass.deepBlue,
+                    )
+                }
+            }
+        }
+
+        // Q&A exchanges that happened mid-session (off-topic questions/statements).
+        // Shows only the last 4 messages so it doesn't scroll-jack the panel.
+        if (bubble.partnerMessages.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                bubble.partnerMessages.takeLast(4).forEach { msg ->
+                    val isUser = msg.role == ChatRole.USER
+                    Text(
+                        text = if (isUser) "You: ${msg.text}" else msg.text,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isUser) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.60f)
+                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.90f),
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Five sine-wave-driven bars whose heights animate in phase with each other (staggered by i/n)
+ * to create a smooth, organic "listening" visual. When [isActive] is false the bars render
+ * at a minimal static height, serving as a "quiet" ready-state indicator.
+ */
+@Composable
+private fun PartnerWaveform(
+    isActive: Boolean,
+    tint: Color,
+    modifier: Modifier = Modifier,
+) {
+    val transition = rememberInfiniteTransition(label = "partnerWave")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1100, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "wavePhase",
+    )
+    Canvas(modifier) {
+        val n = 5
+        val gap = size.width * 0.05f
+        val barW = (size.width - gap * (n - 1)) / n
+        val maxH = size.height
+        val minH = size.height * 0.18f
+        for (i in 0 until n) {
+            val phaseOffset = i.toFloat() / n
+            val sineVal = sin((phase + phaseOffset) * 2.0 * PI).toFloat()
+            val barH = if (isActive) minH + ((sineVal + 1f) / 2f) * (maxH - minH) else minH * 0.7f
+            val x = i * (barW + gap)
+            val y = (maxH - barH) / 2f
+            drawRoundRect(
+                color = tint.copy(alpha = if (isActive) 0.82f else 0.32f),
+                topLeft = Offset(x, y),
+                size = Size(barW, barH),
+                cornerRadius = CornerRadius(barW / 2f),
+            )
+        }
     }
 }

@@ -115,6 +115,11 @@ import kotlin.math.roundToInt
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.logos.bibletranslate.R
 import com.logos.bibletranslate.ui.theme.AccentTheme
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.launch
 import com.logos.bibletranslate.data.BibleLanguage
 import com.logos.bibletranslate.data.BibleRepository
@@ -178,6 +183,25 @@ fun ReaderScreen(
 
     // Initialise TTS once — hands the engine an application context without leaking into the ViewModel constructor.
     LaunchedEffect(Unit) { viewModel.initTts(context.applicationContext) }
+
+    // ── RECORD_AUDIO runtime permission ──────────────────────────────────────
+    // Required for both partner reading and the chat-input voice mic.
+    // We check the current state immediately so buttons are enabled for users who already
+    // granted it; for everyone else we request on first mic tap (demand-driven, not up-front).
+    var micPermGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    val micPermLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted -> micPermGranted = granted }
+
+    /** Calls [block] only if RECORD_AUDIO is already granted; otherwise requests it first. */
+    fun withMicPermission(block: () -> Unit) {
+        if (micPermGranted) block() else micPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
 
     var showBookChapterPicker by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -589,6 +613,8 @@ fun ReaderScreen(
                     onVerseHoverToggle = viewModel::onVerseHoverToggle,
                     onSpeakVerse = { text, lang -> viewModel.onSpeakVerse(text, lang) },
                     onToggleBookmark = viewModel::onToggleBookmark,
+                    partnerHighlightVerseId = uiState.partnerHighlightVerseId,
+                    partnerHighlightIsAi = uiState.partnerHighlightIsAi,
                 )
             }
 
@@ -629,6 +655,10 @@ fun ReaderScreen(
                         onDefinitionWordTapped = viewModel::onDefinitionWordTapped,
                         onVerseRefTapped = viewModel::onVerseRefTapped,
                         onSpeakAiText = viewModel::onSpeakAiText,
+                        onEnterPartnerMode = viewModel::onEnterPartnerMode,
+                        onExitPartnerMode = viewModel::onExitPartnerMode,
+                        onPartnerMicTapped = { withMicPermission(viewModel::onPartnerMicTapped) },
+                        onChatMicTapped = { withMicPermission(viewModel::onChatMicTapped) },
                         // Pad the top so the bubble's BoxWithConstraints receives the correct
                     // available height — without this the 70% cap is computed against the
                     // full screen and the panel can slide up behind the floating navbar.
@@ -666,6 +696,10 @@ private fun VerseList(
     onVerseHoverToggle: (Long) -> Unit = {},
     onSpeakVerse: (text: String, langCode: String) -> Unit = { _, _ -> },
     onToggleBookmark: (Long) -> Unit = {},
+    /** Which verse is currently highlighted for partner reading; null when mode is off. */
+    partnerHighlightVerseId: Long? = null,
+    /** True = AI's verse (first accent color); false = user's verse (last); null = no highlight. */
+    partnerHighlightIsAi: Boolean? = null,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -711,6 +745,8 @@ private fun VerseList(
                     onVerseLocked = { onVerseLocked(verse.numericVerseId) },
                     isHovered = uiState.hoveredVerseId == verse.numericVerseId,
                     isBookmarked = verse.numericVerseId in uiState.bookmarkedVerseIds,
+                    isPartnerHighlightIsAi = if (partnerHighlightVerseId == verse.numericVerseId)
+                        partnerHighlightIsAi else null,
                     onVerseHoverToggle = { onVerseHoverToggle(verse.numericVerseId) },
                     onSpeakVerse = { onSpeakVerse(verse.text, uiState.language.code) },
                     onToggleBookmark = { onToggleBookmark(verse.numericVerseId) },
