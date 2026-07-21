@@ -187,6 +187,14 @@ fun ReaderScreen(
         viewModel.clearHighlightedVerse()
     }
 
+    // Every explicit chapter navigation (picker, search, language switch) bumps this counter.
+    // Scroll unconditionally to item 0 so verse 1 is always at the top — even when the new
+    // chapter has the same verse count as the old one (indices stay the same, only the content
+    // changes, so the LazyColumn would otherwise stay wherever the list was last scrolled to).
+    LaunchedEffect(uiState.scrollToTopTrigger) {
+        if (uiState.scrollToTopTrigger > 0) listState.scrollToItem(0)
+    }
+
     // Deliberately *no* auto-scroll-to-verse when a bubble opens: an animated scroll right as
     // a hold-to-select/drag gesture completes moved the scripture out from under the finger
     // still on screen, so a drag-to-select felt like it lost tracking mid-gesture. The panel

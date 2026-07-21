@@ -154,6 +154,13 @@ data class ReaderUiState(
     val hasMoreBottom: Boolean = true,
     /** Set right after prepending N verses at the top, so the UI can compensate the scroll offset once, then clear it. */
     val pendingTopPrependCount: Int = 0,
+    /**
+     * Incremented each time a fresh chapter is explicitly navigated to (book/chapter picker,
+     * search jump, language switch). The ReaderScreen watches this value and scrolls to item 0
+     * whenever it changes — so every explicit navigation always starts at verse 1.
+     * Not incremented by the continuous-scroll prepend/append paths.
+     */
+    val scrollToTopTrigger: Int = 0,
 )
 
 class ReaderViewModel(
@@ -1021,6 +1028,7 @@ class ReaderViewModel(
             wordTranslations = wordTranslations,
             isLoading = false,
             highlightedVerseId = highlightedVerseId,
+            scrollToTopTrigger = _uiState.value.scrollToTopTrigger + 1,
         )
     }
 
