@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -52,7 +54,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -197,6 +201,8 @@ fun ChatBubble(
     onExitPartnerMode: () -> Unit = {},
     /** Tap the mic during the user's reading turn (partner mode). */
     onPartnerMicTapped: () -> Unit = {},
+    /** Toggle the partner mic on/off (pauses/resumes listening). */
+    onPartnerMicToggle: () -> Unit = {},
     /** Tap the mic in the regular chat input row for free-form voice questions. */
     onChatMicTapped: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -286,7 +292,7 @@ fun ChatBubble(
                         start = if (bubble.isCondensed) 14.dp else 18.dp,
                         end = if (bubble.isCondensed) 14.dp else 18.dp,
                         top = if (bubble.isCondensed) 8.dp else 0.dp,
-                        bottom = if (bubble.isCondensed) 8.dp else 16.dp,
+                        bottom = if (bubble.isCondensed || bubble.isPartnerMode) 8.dp else 16.dp,
                     ),
             ) {
                 // ── Drag handle ─────────────────────────────────────────────────
@@ -297,8 +303,8 @@ fun ChatBubble(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 3.dp)
-                            .height(14.dp)
+                            .padding(top = if (bubble.isPartnerMode) 2.dp else 3.dp)
+                            .height(if (bubble.isPartnerMode) 8.dp else 14.dp)
                             .draggable(
                                 state = draggableState,
                                 orientation = Orientation.Vertical,
@@ -323,62 +329,49 @@ fun ChatBubble(
                     CondensedWordRow(bubble, onDefine, onClose)
                     return@Column
                 }
-                // Sticky header: partner toggle + sparkle + verse label, language dropdown, close/delete.
+                // Sticky header: mode switch | [study controls] | close.
+                // In partner mode only the mode switch + close are shown to keep the strip minimal.
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Partner reading mode toggle — top-left so it's the first control seen.
-                    // Tinted with the first accent color (Glass.skyBlue) when active.
-                    IconButton(
-                        onClick = { if (bubble.isPartnerMode) onExitPartnerMode() else onEnterPartnerMode() },
-                        modifier = Modifier.size(32.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.RecordVoiceOver,
-                            contentDescription = if (bubble.isPartnerMode) "Exit partner reading" else "Start partner reading",
-                            modifier = Modifier.size(17.dp),
-                            tint = if (bubble.isPartnerMode) com.logos.bibletranslate.ui.theme.Glass.skyBlue
-                                   else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
-                        )
-                    }
-                    Sparkle(size = 14.dp, modifier = Modifier.padding(end = 6.dp))
-                    Text(
-                        verseLabel,
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.weight(1f),
+                    // Sliding pill: Translate ↔ Partner icons
+                    PartnerModeSwitch(
+                        isPartnerMode = bubble.isPartnerMode,
+                        onToggle = { if (bubble.isPartnerMode) onExitPartnerMode() else onEnterPartnerMode() },
+                        modifier = Modifier.padding(end = 6.dp),
                     )
-                    // Speaker: reads the initial translation aloud in the target language.
-                    IconButton(
-                        onClick = { onSpeakAiText(bubble.initialTranslation, bubble.bubbleTargetLanguage.code) },
-                        modifier = Modifier.size(32.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.VolumeUp,
-                            contentDescription = "Read translation aloud",
-                            modifier = Modifier.size(17.dp),
-                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                    if (!bubble.isPartnerMode) {
+                        Sparkle(size = 14.dp, modifier = Modifier.padding(end = 6.dp))
+                        Text(
+                            verseLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.weight(1f),
                         )
+                        LanguageDropdown(
+                            options = BibleLanguage.entries.distinctBy { it.code },
+                            selected = bubble.bubbleTargetLanguage,
+                            onSelected = onLanguageChanged,
+                        )
+                        IconButton(onClick = onStartOver) {
+                            Icon(Icons.Filled.Delete, contentDescription = "Delete chat")
+                        }
+                    } else {
+                        Spacer(Modifier.weight(1f))
                     }
-                    LanguageDropdown(
-                        // The AI window is a *language* switcher, not a Bible-version switcher.
-                        // Show only one entry per language code; the reading-language version
-                        // picker is the navbar dropdown above the scripture text.
-                        options = BibleLanguage.entries.distinctBy { it.code },
-                        selected = bubble.bubbleTargetLanguage,
-                        onSelected = onLanguageChanged,
-                    )
-                    IconButton(onClick = onStartOver) {
-                        Icon(Icons.Filled.Delete, contentDescription = "Delete chat")
-                    }
-                    TextButton(onClick = onClose) { Text("✕") }
+                    TextButton(
+                        onClick = onClose,
+                        contentPadding = PaddingValues(horizontal = 6.dp),
+                    ) { Text("✕") }
                 }
 
-                Spacer(Modifier.padding(top = 6.dp))
+                Spacer(Modifier.padding(top = if (bubble.isPartnerMode) 1.dp else 6.dp))
 
                 // Partner reading mode body — uses the same return@Column pattern as the
                 // condensed/minimised states so the study content below is skipped entirely.
                 if (bubble.isPartnerMode) {
                     PartnerReadingBody(
                         bubble = bubble,
+                        micEnabled = bubble.partnerMicEnabled,
                         onMicTapped = onPartnerMicTapped,
+                        onMicToggle = onPartnerMicToggle,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     return@Column
@@ -723,19 +716,7 @@ private fun ChatMessageRow(
                 fontStyle = FontStyle.Italic,
                 modifier = Modifier.weight(1f),
             )
-            if (message.role == ChatRole.ASSISTANT && !message.isError && !message.isVerseCard) {
-                IconButton(
-                    onClick = { onSpeakMessage(message.text) },
-                    modifier = Modifier.size(22.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.VolumeUp,
-                        contentDescription = "Read reply aloud",
-                        modifier = Modifier.size(13.dp),
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
-                    )
-                }
-            }
+            // Speaker removed from AI window — verse-level speaker lives in the scripture pane.
         }
         if (message.role == ChatRole.ASSISTANT && !message.isError) {
             // VerseLinkedText renders verse refs (e.g. "John 3:16") as tappable hyperlinks
@@ -931,17 +912,7 @@ private fun WordInfoCard(
                 style = MaterialTheme.typography.headlineSmall,
                 modifier = Modifier.weight(1f),
             )
-            IconButton(
-                onClick = onSpeak,
-                modifier = Modifier.size(30.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.VolumeUp,
-                    contentDescription = "Hear word",
-                    modifier = Modifier.size(17.dp),
-                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
-                )
-            }
+            // Speaker removed from AI window — verse-level speaker lives in the scripture pane.
         }
         if (info.isLoading) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
@@ -1028,148 +999,142 @@ private fun TypingIndicatorRow() {
 // ── Partner Reading body ─────────────────────────────────────────────────────
 
 /**
- * The panel body shown while partner reading mode is active.
- * Replaces the study content (word info, messages, input) for the duration of the session.
- * Colors automatically follow the selected marble accent: AI turn = [Glass.skyBlue] (first),
- * user turn = [Glass.deepBlue] (last).
+ * Ultra-compact two-row strip: one label row + one waveform row. Total content ≈ 36–40 dp
+ * so the scripture pane stays mostly visible. Colors follow the selected marble accent:
+ * AI turn = [Glass.skyBlue] (first), user turn = [Glass.deepBlue] (last).
  */
 @Composable
 private fun PartnerReadingBody(
     bubble: ChatBubbleState,
+    micEnabled: Boolean,
     onMicTapped: () -> Unit,
+    onMicToggle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val isAiTurn = bubble.partnerTurn == PartnerTurn.AI_SPEAKING ||
-                   bubble.partnerTurn == PartnerTurn.AI_RESPONDING
     val isUserTurn = bubble.partnerTurn == PartnerTurn.AWAITING_USER
     val isListening = bubble.partnerTurn == PartnerTurn.LISTENING
-    // Listening uses the sky-blue "AI" color — the app is actively processing audio.
     val turnColor = if (isUserTurn) Glass.deepBlue else Glass.skyBlue
-    val isWaveActive = !isUserTurn   // bars animate while AI speaks / recogniser is capturing
 
     Column(
-        modifier = modifier.padding(vertical = 10.dp, horizontal = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier.padding(top = 3.dp, bottom = 1.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        // Verse reference (e.g. "Genesis 1:2")
-        if (bubble.partnerVerseLabel.isNotBlank()) {
-            Text(
-                text = bubble.partnerVerseLabel,
-                style = MaterialTheme.typography.labelMedium,
-                color = turnColor,
-                modifier = Modifier.padding(bottom = 4.dp),
-            )
-        }
-
-        // Turn label — compact so it doesn't crowd the waveform
-        Text(
-            text = when (bubble.partnerTurn) {
-                PartnerTurn.AI_SPEAKING    -> "Reading aloud…"
-                PartnerTurn.AWAITING_USER  -> "Your turn"
-                PartnerTurn.LISTENING      -> "Listening…"
-                PartnerTurn.AI_RESPONDING  -> "Thinking…"
-            },
-            style = MaterialTheme.typography.titleSmall,
-            color = turnColor,
-            modifier = Modifier.padding(bottom = 10.dp),
-        )
-
-        // Animated waveform — 5 sine-driven bars; static when AWAITING_USER
-        PartnerWaveform(
-            isActive = isWaveActive,
-            tint = turnColor,
-            modifier = Modifier
-                .fillMaxWidth(0.52f)
-                .height(46.dp)
-                .padding(bottom = 10.dp),
-        )
-
-        // Verse text: shown during the user's turn as a reading cue.
-        // Not shown while AI reads (it's on the main scroll already) or while thinking.
-        if ((isUserTurn || isListening) && bubble.partnerVerseText.isNotBlank()) {
-            Text(
-                text = bubble.partnerVerseText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.78f),
-                maxLines = 5,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-            )
-        }
-
-        Spacer(Modifier.height(10.dp))
-
-        // Pulsing mic button — only shown when waiting for the user to speak.
-        // The user taps it themselves when ready; we never prompt them verbally.
-        AnimatedVisibility(
-            visible = isUserTurn,
-            enter = fadeIn(tween(250)),
-            exit = fadeOut(tween(150)),
+        // Row: [verse ref · turn label] ... [mic icon]
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            val pulseTransition = rememberInfiniteTransition(label = "micPulse")
-            val pulseAlpha by pulseTransition.animateFloat(
-                initialValue = 0.10f,
-                targetValue = 0.27f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(durationMillis = 900, easing = LinearEasing),
-                    repeatMode = RepeatMode.Reverse,
-                ),
-                label = "micPulseAlpha",
+            Text(
+                text = buildString {
+                    if (bubble.partnerVerseLabel.isNotBlank()) {
+                        append(bubble.partnerVerseLabel)
+                        append("  ·  ")
+                    }
+                    append(
+                        when (bubble.partnerTurn) {
+                            PartnerTurn.AI_SPEAKING   -> "Reading aloud…"
+                            PartnerTurn.AWAITING_USER -> "Your turn"
+                            PartnerTurn.LISTENING     -> "Listening…"
+                            PartnerTurn.AI_RESPONDING -> "Thinking…"
+                        },
+                    )
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = turnColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
-            Box(contentAlignment = Alignment.Center) {
-                // Outer glow ring
-                Box(
-                    modifier = Modifier
-                        .size(70.dp)
-                        .background(Glass.deepBlue.copy(alpha = pulseAlpha), CircleShape),
-                )
-                // Tappable inner circle
-                Box(
-                    modifier = Modifier
-                        .size(52.dp)
-                        .background(Glass.deepBlue.copy(alpha = 0.18f), CircleShape)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = onMicTapped,
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Mic,
-                        contentDescription = "Tap to read your verse",
-                        modifier = Modifier.size(26.dp),
-                        tint = Glass.deepBlue,
-                    )
-                }
-            }
-        }
-
-        // Q&A exchanges that happened mid-session (off-topic questions/statements).
-        // Shows only the last 4 messages so it doesn't scroll-jack the panel.
-        if (bubble.partnerMessages.isNotEmpty()) {
-            Spacer(Modifier.height(10.dp))
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+            // Tap to speak (AWAITING_USER + mic on); tap to toggle mic on/off otherwise.
+            IconButton(
+                onClick = { if (isUserTurn && micEnabled) onMicTapped() else onMicToggle() },
+                modifier = Modifier.size(26.dp),
             ) {
-                bubble.partnerMessages.takeLast(4).forEach { msg ->
-                    val isUser = msg.role == ChatRole.USER
-                    Text(
-                        text = if (isUser) "You: ${msg.text}" else msg.text,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (isUser) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.60f)
-                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.90f),
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                Icon(
+                    imageVector = if (micEnabled) Icons.Filled.Mic else Icons.Filled.MicOff,
+                    contentDescription = if (micEnabled) "Mic on" else "Mic off",
+                    modifier = Modifier.size(13.dp),
+                    tint = when {
+                        isListening              -> Glass.skyBlue
+                        isUserTurn && micEnabled -> Glass.deepBlue
+                        !micEnabled              -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f)
+                        else                     -> turnColor.copy(alpha = 0.40f)
+                    },
+                )
             }
         }
+        // Waveform — full width, compact height
+        PartnerWaveform(
+            isActive = !isUserTurn || isListening,
+            tint = turnColor,
+            modifier = Modifier.fillMaxWidth().height(20.dp),
+        )
+    }
+}
+
+/**
+ * Sliding two-icon pill switch: left = Translate (Translator Mode), right = RecordVoiceOver
+ * (Partner Mode). An animated thumb slides between the two positions.
+ */
+@Composable
+private fun PartnerModeSwitch(
+    isPartnerMode: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val thumbX by animateDpAsState(
+        targetValue = if (isPartnerMode) 18.dp else 0.dp,
+        animationSpec = tween(durationMillis = 180),
+        label = "modeSwitchThumb",
+    )
+    Box(
+        modifier = modifier
+            .width(40.dp)
+            .height(22.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .background(
+                if (isPartnerMode) Glass.skyBlue.copy(alpha = 0.20f)
+                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.09f),
+            )
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onToggle,
+            ),
+    ) {
+        // Background: both icons always rendered; active icon full-alpha, inactive faded.
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Translate,
+                contentDescription = "Translator mode",
+                modifier = Modifier.size(11.dp),
+                tint = if (!isPartnerMode) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.80f)
+                       else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.20f),
+            )
+            Icon(
+                imageVector = Icons.Filled.RecordVoiceOver,
+                contentDescription = "Partner mode",
+                modifier = Modifier.size(11.dp),
+                tint = if (isPartnerMode) Glass.skyBlue
+                       else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.20f),
+            )
+        }
+        // Sliding thumb (sits above the icons)
+        Box(
+            modifier = Modifier
+                .offset(x = thumbX + 1.dp)
+                .padding(vertical = 2.dp)
+                .size(18.dp)
+                .clip(CircleShape)
+                .background(
+                    if (isPartnerMode) Glass.skyBlue.copy(alpha = 0.30f)
+                    else MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                ),
+        )
     }
 }
 

@@ -130,6 +130,10 @@ data class ChatBubbleState(
     val partnerVerseText: String = "",
     /** Running transcript of questions/answers exchanged during the reading session. */
     val partnerMessages: List<com.logos.bibletranslate.data.ChatMessage> = emptyList(),
+    /** Whether the partner mic is enabled; default on, user can tap to pause. */
+    val partnerMicEnabled: Boolean = true,
+    /** True while the chat-input mic is actively capturing speech. */
+    val chatMicListening: Boolean = false,
 )
 
 data class VerseTranslationEntry(val language: BibleLanguage, val text: String?)
@@ -465,6 +469,14 @@ class ReaderViewModel(
     /** Reads any AI-generated text aloud (initial translation, chat reply, word definition). */
     fun onSpeakAiText(text: String, langCode: String) { tts?.speak(text, langCode) }
 
+    /** Toggle the partner mic on/off without changing the turn state. */
+    fun onPartnerMicToggle() {
+        val bubble = _uiState.value.chatBubble ?: return
+        _uiState.value = _uiState.value.copy(
+            chatBubble = bubble.copy(partnerMicEnabled = !bubble.partnerMicEnabled),
+        )
+    }
+
     /**
      * Tapping the mic button in the regular chat input row — captures a single utterance
      * and fills the follow-up input field with the transcript so the user can review and send.
@@ -476,11 +488,14 @@ class ReaderViewModel(
         if (bubble.isPartnerMode) return
         viewModelScope.launch(Dispatchers.Main) {
             val ctx = appContext ?: return@launch
+            val cur = _uiState.value.chatBubble ?: return@launch
+            _uiState.value = _uiState.value.copy(chatBubble = cur.copy(chatMicListening = true))
             val langTag = localeTagFor(state.language.code)
-            recognizer?.listenOnce(ctx, langTag)?.onSuccess { transcript ->
-                if (transcript.isNotBlank()) {
-                    onFollowUpInputChanged(transcript)
-                }
+            val result = recognizer?.listenOnce(ctx, langTag)
+            val latest = _uiState.value.chatBubble
+            if (latest != null) _uiState.value = _uiState.value.copy(chatBubble = latest.copy(chatMicListening = false))
+            result?.onSuccess { transcript ->
+                if (transcript.isNotBlank()) onFollowUpInputChanged(transcript)
             }
         }
     }
@@ -525,6 +540,7 @@ class ReaderViewModel(
         val state = _uiState.value
         val bubble = state.chatBubble ?: return
         if (bubble.partnerTurn != PartnerTurn.AWAITING_USER) return
+        if (!bubble.partnerMicEnabled) return
         viewModelScope.launch(Dispatchers.Main) {
             setPartnerTurn(PartnerTurn.LISTENING)
             val ctx = appContext ?: return@launch

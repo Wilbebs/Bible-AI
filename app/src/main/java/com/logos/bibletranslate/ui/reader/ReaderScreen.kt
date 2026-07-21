@@ -194,13 +194,19 @@ fun ReaderScreen(
                 PackageManager.PERMISSION_GRANTED,
         )
     }
+    // Store the pending action so it auto-fires after the user grants permission.
+    var pendingMicAction by remember { mutableStateOf<Int?>(null) } // 0=chat, 1=partner
     val micPermLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
-    ) { granted -> micPermGranted = granted }
-
-    /** Calls [block] only if RECORD_AUDIO is already granted; otherwise requests it first. */
-    fun withMicPermission(block: () -> Unit) {
-        if (micPermGranted) block() else micPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    ) { granted ->
+        micPermGranted = granted
+        if (granted) {
+            when (pendingMicAction) {
+                0 -> viewModel.onChatMicTapped()
+                1 -> viewModel.onPartnerMicTapped()
+            }
+        }
+        pendingMicAction = null
     }
 
     var showBookChapterPicker by remember { mutableStateOf(false) }
@@ -657,8 +663,15 @@ fun ReaderScreen(
                         onSpeakAiText = viewModel::onSpeakAiText,
                         onEnterPartnerMode = viewModel::onEnterPartnerMode,
                         onExitPartnerMode = viewModel::onExitPartnerMode,
-                        onPartnerMicTapped = { withMicPermission(viewModel::onPartnerMicTapped) },
-                        onChatMicTapped = { withMicPermission(viewModel::onChatMicTapped) },
+                        onPartnerMicTapped = {
+                            if (micPermGranted) viewModel.onPartnerMicTapped()
+                            else { pendingMicAction = 1; micPermLauncher.launch(Manifest.permission.RECORD_AUDIO) }
+                        },
+                        onChatMicTapped = {
+                            if (micPermGranted) viewModel.onChatMicTapped()
+                            else { pendingMicAction = 0; micPermLauncher.launch(Manifest.permission.RECORD_AUDIO) }
+                        },
+                        onPartnerMicToggle = viewModel::onPartnerMicToggle,
                         // Pad the top so the bubble's BoxWithConstraints receives the correct
                     // available height — without this the 70% cap is computed against the
                     // full screen and the panel can slide up behind the floating navbar.
