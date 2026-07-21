@@ -1,11 +1,14 @@
 package com.logos.bibletranslate.ui.reader
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -15,6 +18,13 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,6 +46,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import com.logos.bibletranslate.data.VerseData
+import com.logos.bibletranslate.ui.theme.Glass
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -66,6 +77,18 @@ fun VerseRow(
     onGestureDown: () -> Unit = {},
     /** Fired when this row's own triple tap fires, to lock it. */
     onVerseLocked: () -> Unit = {},
+    /** Whether this verse's action icons (speaker + bookmark) are currently visible.
+     * Toggled by tapping the verse number — a second tap hides them; tapping a different
+     * verse number moves the icons there instead. */
+    isHovered: Boolean = false,
+    /** Whether this verse is bookmarked — applies a soft accent-color wash behind the row. */
+    isBookmarked: Boolean = false,
+    /** Called when the verse number is tapped — parent decides toggle logic. */
+    onVerseHoverToggle: () -> Unit = {},
+    /** Called when the speaker icon is tapped — parent reads the verse text aloud. */
+    onSpeakVerse: () -> Unit = {},
+    /** Called when the bookmark icon is tapped — parent toggles bookmark state. */
+    onToggleBookmark: () -> Unit = {},
 ) {
     // A two-tone (sky-blue ↔ deep-blue) breathing pulse, applied uniformly to every word in
     // the verse so the whole sentence pulses together, not just one word.
@@ -87,21 +110,30 @@ fun VerseRow(
     val bounds = remember(verse.verseId) { mutableStateMapOf<Int, Rect>() }
     // Read fresh at the start of each gesture (not captured once when pointerInput's block
     // was created) so a bubble opened mid-session correctly flips later taps into toggle mode
-    // without disturbing a gesture already in progress (tap-word-autofill-idea.md).
+    // without disturbing a gesture already in progress.
     val toggleModeState = rememberUpdatedState(bubbleOpenForThisVerse)
     val lockedState = rememberUpdatedState(isLocked)
     val haptics = LocalHapticFeedback.current
 
-    Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-        // Verse number doubles as the "show this verse in the other two languages"
-        // affordance (previously a separate "T" button) — tinted like a link so
-        // it still reads as tappable, but it no longer eats a fixed 40dp column,
-        // letting the verse text start almost flush with the screen edge.
+    // Bookmark: soft accent-color wash behind the whole row, matching the user's chosen theme.
+    val rowBackground = if (isBookmarked) Glass.skyBlue.copy(alpha = 0.15f) else Color.Transparent
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(rowBackground),
+        verticalAlignment = Alignment.Top,
+    ) {
+        // Verse number — tapping it toggles the action icons (hover state) for this verse.
+        // The clickable region is the number itself plus its padding, deliberately small so
+        // it doesn't compete with word-selection gestures on the text alongside it.
         Text(
             text = "${verse.verse}",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(top = 7.dp, end = 3.dp),
+            modifier = Modifier
+                .clickable(onClick = onVerseHoverToggle)
+                .padding(top = 7.dp, end = 3.dp),
         )
         FlowRow(
             modifier = Modifier
@@ -110,39 +142,23 @@ fun VerseRow(
                 .pointerInput(verse.verseId) {
                     // Selection is deliberately *not* started by a plain tap anymore — a stray
                     // finger landing mid-scroll used to fire a translation instantly. Now:
-                    //   • hold a word ~750ms → select it
+                    //   • hold a word ~450ms → select it
                     //   • double-tap a word   → select it
                     //   • triple-tap          → select the whole verse
                     //   • slide after any of those → extend the highlight word by word
                     // A plain tap (or a touch that moves into a scroll) does nothing.
-                    // Multi-tap bookkeeping survives across gestures in these locals.
                     var tapCount = 0
                     var lastTapUpMillis = 0L
                     awaitEachGesture {
                         val down = awaitFirstDown()
-                        // Always fires first, even on this row's own locked verse — a tap on a
-                        // *different* verse than the one currently locked releases that lock.
                         onGestureDown()
                         if (lockedState.value) {
-                            // This verse was just triple-tap-selected; every tap on it is inert
-                            // until an outside tap unlocks it (guards the in-flight/shown
-                            // translation from a stray extra tap). The down IS consumed here —
-                            // not to block scrolling (Compose's list-scroll drag detector
-                            // tolerates an already-consumed down and still starts on movement,
-                            // the same reason dragging over a button inside a scrollable list
-                            // still scrolls it) but so the full-screen outside-tap catcher
-                            // behind the list doesn't also see this same tap as unconsumed and
-                            // mistake a repeat tap *on the locked verse itself* for an "outside"
-                            // tap that would immediately undo the lock.
                             down.consume()
                             return@awaitEachGesture
                         }
                         val isToggleGesture = toggleModeState.value
                         val startIndex = hitTest(down.position, bounds)
                         if (isToggleGesture) {
-                            // Bubble already open on this verse: a plain tap still toggles the
-                            // word in/out of the pending autofill question — the user is already
-                            // deliberately working inside this verse, so no hold gate here.
                             startIndex?.let(onWordToggle)
                             while (true) {
                                 val event = awaitPointerEvent()
@@ -155,36 +171,23 @@ fun VerseRow(
                             return@awaitEachGesture
                         }
 
-                        // Deliberately *not* requiring the same exact word as the previous tap:
-                        // real fingers land a word or two off between taps, and requiring an
-                        // exact match let that natural imprecision reset the chain, so a
-                        // "triple tap" often fizzled into three independent single taps and the
-                        // verse never got fully selected. Timing alone (within the platform's
-                        // double-tap window) is enough — all taps land within one verse row's
-                        // gesture handler anyway.
                         val isMultiTapContinuation = down.uptimeMillis - lastTapUpMillis <= viewConfiguration.doubleTapTimeoutMillis
                         val tapNumber = if (isMultiTapContinuation) tapCount + 1 else 1
 
                         var selecting = false
                         when {
                             tapNumber >= 3 -> {
-                                // Triple tap: the whole verse.
                                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                 onSelectionStart(0)
                                 if (tokens.isNotEmpty()) onSelectionExtend(tokens.lastIndex)
                                 selecting = true
                             }
                             tapNumber == 2 -> {
-                                // Double tap: select this word (slide extends from it).
                                 haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 onSelectionStart(startIndex)
                                 selecting = true
                             }
                             else -> {
-                                // First tap: nothing happens yet. It becomes a selection only if
-                                // it turns into a hold; a quick release is remembered as a
-                                // potential first tap of a double/triple; movement past touch
-                                // slop hands the gesture over to the scroller untouched.
                                 var releasedAt = -1L
                                 var movedAway = false
                                 val finishedBeforeTimeout = withTimeoutOrNull(HOLD_TO_SELECT_MILLIS) {
@@ -203,7 +206,6 @@ fun VerseRow(
                                 }
                                 when {
                                     finishedBeforeTimeout == null -> {
-                                        // Finger stayed put past the timeout: hold-to-select.
                                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                         onSelectionStart(startIndex)
                                         selecting = true
@@ -237,10 +239,7 @@ fun VerseRow(
                                     change.consume()
                                 }
                             }
-                            // Light tick as a slide-extended highlight is let go.
                             if (extended) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            // A selection release still advances the multi-tap chain, so
-                            // double-tap (word) can escalate to a third tap (whole verse).
                             tapCount = if (tapNumber >= 3) 0 else tapNumber
                             lastTapUpMillis = lastUptime
                             if (tapNumber >= 3) onVerseLocked()
@@ -263,6 +262,42 @@ fun VerseRow(
                         .padding(horizontal = 2.dp),
                     style = MaterialTheme.typography.bodyLarge,
                 )
+            }
+        }
+
+        // ── Action icons: speaker + bookmark ────────────────────────────────
+        // Fade in when the verse number is tapped; fade out on a second tap or when another
+        // verse is activated. Compact 28 dp tap targets / 16 dp glyphs so they don't push
+        // the verse row height or intrude on reading width.
+        AnimatedVisibility(
+            visible = isHovered,
+            enter = fadeIn(animationSpec = tween(160)),
+            exit = fadeOut(animationSpec = tween(120)),
+        ) {
+            Row(verticalAlignment = Alignment.Top) {
+                IconButton(
+                    onClick = onSpeakVerse,
+                    modifier = Modifier.size(28.dp).padding(top = 2.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.VolumeUp,
+                        contentDescription = "Read verse aloud",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.78f),
+                    )
+                }
+                IconButton(
+                    onClick = onToggleBookmark,
+                    modifier = Modifier.size(28.dp).padding(top = 2.dp),
+                ) {
+                    Icon(
+                        imageVector = if (isBookmarked) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
+                        contentDescription = if (isBookmarked) "Remove bookmark" else "Bookmark verse",
+                        modifier = Modifier.size(16.dp),
+                        tint = if (isBookmarked) Glass.skyBlue
+                               else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                    )
+                }
             }
         }
     }

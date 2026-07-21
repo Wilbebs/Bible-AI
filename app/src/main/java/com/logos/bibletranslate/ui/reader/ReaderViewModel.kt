@@ -1,8 +1,10 @@
 package com.logos.bibletranslate.ui.reader
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.logos.bibletranslate.data.ApiKeys
+import com.logos.bibletranslate.data.VerseTextToSpeech
 import com.logos.bibletranslate.data.BibleLanguage
 import com.logos.bibletranslate.data.BibleRepository
 import com.logos.bibletranslate.data.BookInfo
@@ -161,6 +163,11 @@ data class ReaderUiState(
      * Not incremented by the continuous-scroll prepend/append paths.
      */
     val scrollToTopTrigger: Int = 0,
+    /** Which verse is currently showing its action icons (speaker + bookmark).
+     *  Set by tapping the verse number; null when none are shown. */
+    val hoveredVerseId: Long? = null,
+    /** Verses the user has bookmarked this session — UI-only until a DB layer is added. */
+    val bookmarkedVerseIds: Set<Long> = emptySet(),
 )
 
 class ReaderViewModel(
@@ -175,6 +182,9 @@ class ReaderViewModel(
 
     private val _uiState = MutableStateFlow(ReaderUiState())
     val uiState: StateFlow<ReaderUiState> = _uiState.asStateFlow()
+
+    /** TTS engine — lazily initialised from the composable via [initTts]; released in [onCleared]. */
+    private var tts: VerseTextToSpeech? = null
 
     /** Guards against a stale live-call result overwriting a newer selection. */
     private var liveCallRequestId = 0
@@ -396,6 +406,42 @@ class ReaderViewModel(
      * up in the current reading language's DB and injects it as a scripture card in the chat so
      * the user can read it without leaving the AI window or triggering a fresh navigation.
      */
+    // ── TTS + verse action icons ─────────────────────────────────────────────
+
+    /** Call once from the composable (LaunchedEffect) to hand the engine an application context. */
+    fun initTts(context: Context) {
+        if (tts == null) tts = VerseTextToSpeech(context.applicationContext)
+    }
+
+    /** Tapping the verse number shows/hides the action icons for that verse.
+     *  Tapping a second time (same verse) hides them; tapping a different verse moves them. */
+    fun onVerseHoverToggle(id: Long) {
+        val cur = _uiState.value.hoveredVerseId
+        _uiState.value = _uiState.value.copy(hoveredVerseId = if (cur == id) null else id)
+    }
+
+    /** Toggle bookmark for a verse — soft highlight only for now, no DB write. */
+    fun onToggleBookmark(id: Long) {
+        val current = _uiState.value.bookmarkedVerseIds
+        _uiState.value = _uiState.value.copy(
+            bookmarkedVerseIds = if (id in current) current - id else current + id,
+        )
+    }
+
+    /** Reads a verse's full text aloud using the verse's reading language locale. */
+    fun onSpeakVerse(text: String, langCode: String) { tts?.speak(text, langCode) }
+
+    /** Reads any AI-generated text aloud (initial translation, chat reply, word definition). */
+    fun onSpeakAiText(text: String, langCode: String) { tts?.speak(text, langCode) }
+
+    /** Stop any in-progress TTS playback (e.g. when the bubble closes or language changes). */
+    fun onStopSpeaking() { tts?.stop() }
+
+    override fun onCleared() {
+        super.onCleared()
+        tts?.shutdown()
+    }
+
     fun onVerseRefTapped(ref: String) {
         val state = _uiState.value
         if (state.chatBubble == null) return

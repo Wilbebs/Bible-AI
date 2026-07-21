@@ -40,6 +40,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -169,6 +170,8 @@ fun ChatBubble(
     onResponseWordTapped: (String) -> Unit,
     onDefinitionWordTapped: (String) -> Unit,
     onVerseRefTapped: (String) -> Unit = {},
+    /** Reads any AI text aloud — routed to the ViewModel's TTS engine. */
+    onSpeakAiText: (text: String, langCode: String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val hasConversation = bubble.messages.isNotEmpty()
@@ -301,6 +304,18 @@ fun ChatBubble(
                         style = MaterialTheme.typography.labelMedium,
                         modifier = Modifier.weight(1f),
                     )
+                    // Speaker: reads the initial translation aloud in the target language.
+                    IconButton(
+                        onClick = { onSpeakAiText(bubble.initialTranslation, bubble.bubbleTargetLanguage.code) },
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.VolumeUp,
+                            contentDescription = "Read translation aloud",
+                            modifier = Modifier.size(17.dp),
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                        )
+                    }
                     LanguageDropdown(
                         // The AI window is a *language* switcher, not a Bible-version switcher.
                         // Show only one entry per language code; the reading-language version
@@ -332,6 +347,7 @@ fun ChatBubble(
                                 ?.takeIf { it == info.word && !bubble.initialIsLoading }
                                 ?.let { bubble.initialTranslation },
                         onDefinitionWordTapped = onDefinitionWordTapped,
+                        onSpeak = { onSpeakAiText(info.word, sourceLanguage.code) },
                     )
                 }
 
@@ -383,7 +399,14 @@ fun ChatBubble(
                             .heightIn(max = maxMessageListHeight)
                             .padding(top = 8.dp),
                     ) {
-                        items(bubble.messages) { message -> ChatMessageRow(message, onResponseWordTapped, onVerseRefTapped) }
+                        items(bubble.messages) { message ->
+                            ChatMessageRow(
+                                message = message,
+                                onResponseWordTapped = onResponseWordTapped,
+                                onVerseRefTapped = onVerseRefTapped,
+                                onSpeakMessage = { text -> onSpeakAiText(text, bubble.bubbleTargetLanguage.code) },
+                            )
+                        }
                         if (bubble.isSendingFollowUp) {
                             item { TypingIndicatorRow() }
                         }
@@ -603,6 +626,7 @@ private fun ChatMessageRow(
     message: ChatMessage,
     onResponseWordTapped: (String) -> Unit,
     onVerseRefTapped: (String) -> Unit,
+    onSpeakMessage: (String) -> Unit = {},
 ) {
     // Verse cards are injected by tapping a hyperlinked verse reference — rendered as a
     // scripture excerpt card rather than a conversation turn so they stay visually distinct.
@@ -623,7 +647,29 @@ private fun ChatMessageRow(
     }
     val label = if (message.role == ChatRole.USER) "You" else "Assistant"
     Column(Modifier.padding(vertical = 4.dp)) {
-        Text(label, style = MaterialTheme.typography.labelSmall, fontStyle = FontStyle.Italic)
+        // Label row — for assistant messages a tiny speaker sits at the trailing edge so the
+        // user can replay the reply without needing to re-send or re-read.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                fontStyle = FontStyle.Italic,
+                modifier = Modifier.weight(1f),
+            )
+            if (message.role == ChatRole.ASSISTANT && !message.isError && !message.isVerseCard) {
+                IconButton(
+                    onClick = { onSpeakMessage(message.text) },
+                    modifier = Modifier.size(22.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.VolumeUp,
+                        contentDescription = "Read reply aloud",
+                        modifier = Modifier.size(13.dp),
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                    )
+                }
+            }
+        }
         if (message.role == ChatRole.ASSISTANT && !message.isError) {
             // VerseLinkedText renders verse refs (e.g. "John 3:16") as tappable hyperlinks
             // that show the verse inline when tapped; all other words stay individually
@@ -783,34 +829,53 @@ private fun TappableWords(
  * lookup for that word instead of folding it into the multi-word follow-up autofill queue.
  */
 @Composable
-private fun WordInfoCard(info: WordInfoState, translation: String?, onDefinitionWordTapped: (String) -> Unit) {
+private fun WordInfoCard(
+    info: WordInfoState,
+    translation: String?,
+    onDefinitionWordTapped: (String) -> Unit,
+    onSpeak: () -> Unit = {},
+) {
     Column(Modifier.padding(bottom = 8.dp)) {
-        // "word · translation" — the translation rides inline right next to the word (smaller,
-        // not underlined, dot-separated) instead of as its own block below the card.
-        Text(
-            buildAnnotatedString {
-                withStyle(
-                    SpanStyle(
-                        fontSize = MaterialTheme.typography.headlineSmall.fontSize,
-                        fontWeight = FontWeight.Bold,
-                    ),
-                ) {
-                    append(info.word)
-                }
-                if (translation != null) {
+        // "word · translation" header row — speaker sits at the trailing edge so the user
+        // can hear the word pronounced without having to leave the card or type anything.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                buildAnnotatedString {
                     withStyle(
                         SpanStyle(
-                            fontSize = MaterialTheme.typography.titleMedium.fontSize,
-                            fontWeight = FontWeight.Normal,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = MaterialTheme.typography.headlineSmall.fontSize,
+                            fontWeight = FontWeight.Bold,
                         ),
                     ) {
-                        append("  ·  $translation")
+                        append(info.word)
                     }
-                }
-            },
-            style = MaterialTheme.typography.headlineSmall,
-        )
+                    if (translation != null) {
+                        withStyle(
+                            SpanStyle(
+                                fontSize = MaterialTheme.typography.titleMedium.fontSize,
+                                fontWeight = FontWeight.Normal,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            ),
+                        ) {
+                            append("  ·  $translation")
+                        }
+                    }
+                },
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(
+                onClick = onSpeak,
+                modifier = Modifier.size(30.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.VolumeUp,
+                    contentDescription = "Hear word",
+                    modifier = Modifier.size(17.dp),
+                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
+                )
+            }
+        }
         if (info.isLoading) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
                 CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)

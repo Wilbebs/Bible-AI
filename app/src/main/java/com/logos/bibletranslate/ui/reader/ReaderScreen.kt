@@ -99,6 +99,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -173,6 +174,10 @@ fun ReaderScreen(
         ),
     )
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+
+    // Initialise TTS once — hands the engine an application context without leaking into the ViewModel constructor.
+    LaunchedEffect(Unit) { viewModel.initTts(context.applicationContext) }
 
     var showBookChapterPicker by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -581,6 +586,9 @@ fun ReaderScreen(
                     onWordToggle = viewModel::onVerseWordTapped,
                     onGestureDown = viewModel::onVerseGestureDown,
                     onVerseLocked = viewModel::lockVerse,
+                    onVerseHoverToggle = viewModel::onVerseHoverToggle,
+                    onSpeakVerse = { text, lang -> viewModel.onSpeakVerse(text, lang) },
+                    onToggleBookmark = viewModel::onToggleBookmark,
                 )
             }
 
@@ -620,6 +628,7 @@ fun ReaderScreen(
                         onResponseWordTapped = viewModel::onResponseWordTapped,
                         onDefinitionWordTapped = viewModel::onDefinitionWordTapped,
                         onVerseRefTapped = viewModel::onVerseRefTapped,
+                        onSpeakAiText = viewModel::onSpeakAiText,
                         // Pad the top so the bubble's BoxWithConstraints receives the correct
                     // available height — without this the 70% cap is computed against the
                     // full screen and the panel can slide up behind the floating navbar.
@@ -654,6 +663,9 @@ private fun VerseList(
     onWordToggle: (Long, Int) -> Unit,
     onGestureDown: (Long) -> Unit,
     onVerseLocked: (Long) -> Unit,
+    onVerseHoverToggle: (Long) -> Unit = {},
+    onSpeakVerse: (text: String, langCode: String) -> Unit = { _, _ -> },
+    onToggleBookmark: (Long) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -697,6 +709,11 @@ private fun VerseList(
                     isLocked = uiState.lockedVerseId == verse.numericVerseId,
                     onGestureDown = { onGestureDown(verse.numericVerseId) },
                     onVerseLocked = { onVerseLocked(verse.numericVerseId) },
+                    isHovered = uiState.hoveredVerseId == verse.numericVerseId,
+                    isBookmarked = verse.numericVerseId in uiState.bookmarkedVerseIds,
+                    onVerseHoverToggle = { onVerseHoverToggle(verse.numericVerseId) },
+                    onSpeakVerse = { onSpeakVerse(verse.text, uiState.language.code) },
+                    onToggleBookmark = { onToggleBookmark(verse.numericVerseId) },
                 )
             }
         }
