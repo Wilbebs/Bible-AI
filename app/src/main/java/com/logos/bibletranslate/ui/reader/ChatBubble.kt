@@ -1,5 +1,7 @@
 package com.logos.bibletranslate.ui.reader
 
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
@@ -35,6 +37,7 @@ import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -46,6 +49,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -212,7 +216,7 @@ fun ChatBubble(
     // sheet-like study panel, not a floating chat bubble, so it should read as
     // part of the screen rather than a small popover shrinking the verse
     // text's usable width behind it.
-    val widthFraction = 0.94f
+    val widthFraction = 0.97f
 
     BoxWithConstraints(modifier) {
         val density = LocalDensity.current
@@ -224,18 +228,11 @@ fun ChatBubble(
 
         // DraggableState for the handle — startDragImmediately = true bypasses touch slop
         // so every finger movement from the very first pixel is tracked. Positive delta = down.
-        // Dragging up expands, dragging down condenses. When the panel is currently minimized,
-        // dragging up past the threshold re-expands it; when expanded, dragging below the
-        // threshold minimizes it. This is the same single handle used for both gestures.
+        // Fully continuous: no snap breakpoints — the panel height follows the finger exactly.
         val draggableState = rememberDraggableState { delta ->
             val heightPx = with(density) { availableHeight.toPx() }
             val deltaFrac = -delta / heightPx
-            val newFrac = (userHeightFraction + deltaFrac).coerceIn(0.15f, 0.92f)
-            userHeightFraction = newFrac
-            when {
-                bubble.isMinimized && newFrac >= 0.40f -> onExpand()
-                !bubble.isMinimized && newFrac <= 0.22f -> onMinimize()
-            }
+            userHeightFraction = (userHeightFraction + deltaFrac).coerceIn(0.15f, 0.92f)
         }
 
         // Reset fraction to comfortable reading height whenever the panel is re-expanded.
@@ -330,45 +327,47 @@ fun ChatBubble(
                     return@Column
                 }
                 // Sticky header.
-                // Translator mode: [Sparkle · VerseLabel(weight)] [Pill] [Language] [✕]
-                // Partner mode:    [Pill] [Language] [spacer(weight)] [✕]
-                // The ✕ resets *and* closes the bubble (same practical effect for the user).
-                // The delete icon has been removed — ✕ is the single dismiss/reset action.
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // Two-row header.
+                // Row 1: [Sparkle · VerseRef] in translator mode, or just spacer; ✕ pinned top-right.
+                // Row 2: [Pill][Language] right-aligned under the ✕.
+                // ✕ resets *and* closes — it is the single dismiss/reset action.
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
                     if (!bubble.isPartnerMode) {
-                        // Left cluster: AI logo + verse reference, grows to fill available space.
                         Sparkle(size = 14.dp, modifier = Modifier.padding(end = 6.dp))
                         Text(
                             verseLabel,
                             style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier.weight(1f),
                         )
-                    }
-                    // Sliding pill: Translate ↔ Partner icons (right-aligned in both modes).
-                    PartnerModeSwitch(
-                        isPartnerMode = bubble.isPartnerMode,
-                        onToggle = { if (bubble.isPartnerMode) onExitPartnerMode() else onEnterPartnerMode() },
-                        modifier = Modifier.padding(horizontal = 4.dp),
-                    )
-                    // Language dropdown shown in both modes so language can be switched
-                    // mid-conversation in partner reading as well.
-                    LanguageDropdown(
-                        options = BibleLanguage.entries.distinctBy { it.code },
-                        selected = bubble.bubbleTargetLanguage,
-                        onSelected = onLanguageChanged,
-                    )
-                    if (bubble.isPartnerMode) {
-                        // Push ✕ to the far right in partner mode.
+                    } else {
                         Spacer(Modifier.weight(1f))
                     }
-                    // ✕ resets the conversation and closes the panel.
                     TextButton(
                         onClick = { onStartOver(); onClose() },
                         contentPadding = PaddingValues(horizontal = 6.dp),
                     ) { Text("✕") }
                 }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.End,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
+                ) {
+                    PartnerModeSwitch(
+                        isPartnerMode = bubble.isPartnerMode,
+                        onToggle = { if (bubble.isPartnerMode) onExitPartnerMode() else onEnterPartnerMode() },
+                        modifier = Modifier.padding(end = 4.dp),
+                    )
+                    LanguageDropdown(
+                        options = BibleLanguage.entries.distinctBy { it.code },
+                        selected = bubble.bubbleTargetLanguage,
+                        onSelected = onLanguageChanged,
+                    )
+                }
 
-                Spacer(Modifier.padding(top = if (bubble.isPartnerMode) 1.dp else 6.dp))
+                Spacer(Modifier.padding(top = if (bubble.isPartnerMode) 1.dp else 3.dp))
 
                 // Partner reading mode body — uses the same return@Column pattern as the
                 // condensed/minimised states so the study content below is skipped entirely.
@@ -380,6 +379,43 @@ fun ChatBubble(
                         onMicToggle = onPartnerMicToggle,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    return@Column
+                }
+
+                // ── Offline guard ────────────────────────────────────────────────────────
+                // All AI features (translation, chat, definitions) require a live network.
+                // When the device is offline we show a friendly prompt instead of blank
+                // content and skip everything network-dependent.
+                val ctx = LocalContext.current
+                val isOnline = remember {
+                    val cm = ctx.getSystemService(ConnectivityManager::class.java)
+                    val caps = cm?.getNetworkCapabilities(cm.activeNetwork)
+                    caps != null && (
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+                    )
+                }
+                if (!isOnline) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            "No internet connection",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "Connect to Wi-Fi or mobile data to use Bible AI features.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                     return@Column
                 }
 
@@ -438,7 +474,22 @@ fun ChatBubble(
                             fontWeight = FontWeight.Bold,
                             onWordTapped = onResponseWordTapped,
                             animate = !bubble.initialIsLoading,
+                            modifier = Modifier.weight(1f, fill = false),
                         )
+                        // Speaker: tap to hear the verse translation read aloud.
+                        if (!bubble.initialIsLoading && bubble.initialTranslation.isNotBlank()) {
+                            IconButton(
+                                onClick = { onSpeakAiText(bubble.initialTranslation, bubble.bubbleTargetLanguage.code) },
+                                modifier = Modifier.size(28.dp).padding(start = 4.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.VolumeUp,
+                                    contentDescription = "Read translation aloud",
+                                    modifier = Modifier.size(15.dp),
+                                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.70f),
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -466,7 +517,7 @@ fun ChatBubble(
 
                 if (bubble.atCap) {
                     Text(
-                        "This is a deep conversation! Starting fresh will help keep answers focused — tap the trash icon to continue.",
+                        "This is a deep conversation! Starting fresh will keep answers focused — tap ✕ to continue.",
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(top = 8.dp),
                     )
@@ -550,7 +601,7 @@ fun ChatBubble(
                     }
 
                     Row(
-                        Modifier.padding(top = 10.dp),
+                        Modifier.padding(top = 10.dp).offset(x = (-6).dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // Mic button: taps fill the input with a speech transcript via the
@@ -722,7 +773,20 @@ private fun ChatMessageRow(
                 fontStyle = FontStyle.Italic,
                 modifier = Modifier.weight(1f),
             )
-            // Speaker removed from AI window — verse-level speaker lives in the scripture pane.
+            // Speaker: lets the user replay any AI reply without re-sending.
+            if (message.role == ChatRole.ASSISTANT && !message.isError) {
+                IconButton(
+                    onClick = { onSpeakMessage(message.text) },
+                    modifier = Modifier.size(26.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.VolumeUp,
+                        contentDescription = "Read reply aloud",
+                        modifier = Modifier.size(13.dp),
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.50f),
+                    )
+                }
+            }
         }
         if (message.role == ChatRole.ASSISTANT && !message.isError) {
             // VerseLinkedText renders verse refs (e.g. "John 3:16") as tappable hyperlinks
@@ -918,7 +982,18 @@ private fun WordInfoCard(
                 style = MaterialTheme.typography.headlineSmall,
                 modifier = Modifier.weight(1f),
             )
-            // Speaker removed from AI window — verse-level speaker lives in the scripture pane.
+            // Speaker: tap to hear the word pronounced in the source language.
+            IconButton(
+                onClick = onSpeak,
+                modifier = Modifier.size(28.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.VolumeUp,
+                    contentDescription = "Hear word",
+                    modifier = Modifier.size(15.dp),
+                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.70f),
+                )
+            }
         }
         if (info.isLoading) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
