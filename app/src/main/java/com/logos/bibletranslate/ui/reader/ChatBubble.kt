@@ -295,16 +295,16 @@ fun ChatBubble(
                         bottom = if (bubble.isCondensed || bubble.isPartnerMode) 8.dp else 16.dp,
                     ),
             ) {
-                // ── Drag handle ─────────────────────────────────────────────────
-                // 14 dp strip (half the previous size). draggable() with
-                // startDragImmediately = true means every finger movement is tracked
-                // from pixel zero — no touch-slop wait that made it feel unresponsive.
-                if (!bubble.isCondensed) {
+                // ── Drag handle (translator mode only) ──────────────────────────
+                // Hidden in partner mode to reclaim vertical space.
+                // startDragImmediately = true: every finger movement tracked from pixel
+                // zero — no touch-slop wait. Height 20 dp gives a generous touch target.
+                if (!bubble.isCondensed && !bubble.isPartnerMode) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = if (bubble.isPartnerMode) 2.dp else 3.dp)
-                            .height(if (bubble.isPartnerMode) 8.dp else 14.dp)
+                            .padding(top = 3.dp)
+                            .height(20.dp)
                             .draggable(
                                 state = draggableState,
                                 orientation = Orientation.Vertical,
@@ -329,35 +329,41 @@ fun ChatBubble(
                     CondensedWordRow(bubble, onDefine, onClose)
                     return@Column
                 }
-                // Sticky header: mode switch | [study controls] | close.
-                // In partner mode only the mode switch + close are shown to keep the strip minimal.
+                // Sticky header.
+                // Translator mode: [Sparkle · VerseLabel(weight)] [Pill] [Language] [✕]
+                // Partner mode:    [Pill] [Language] [spacer(weight)] [✕]
+                // The ✕ resets *and* closes the bubble (same practical effect for the user).
+                // The delete icon has been removed — ✕ is the single dismiss/reset action.
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Sliding pill: Translate ↔ Partner icons
-                    PartnerModeSwitch(
-                        isPartnerMode = bubble.isPartnerMode,
-                        onToggle = { if (bubble.isPartnerMode) onExitPartnerMode() else onEnterPartnerMode() },
-                        modifier = Modifier.padding(end = 6.dp),
-                    )
                     if (!bubble.isPartnerMode) {
+                        // Left cluster: AI logo + verse reference, grows to fill available space.
                         Sparkle(size = 14.dp, modifier = Modifier.padding(end = 6.dp))
                         Text(
                             verseLabel,
                             style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier.weight(1f),
                         )
-                        LanguageDropdown(
-                            options = BibleLanguage.entries.distinctBy { it.code },
-                            selected = bubble.bubbleTargetLanguage,
-                            onSelected = onLanguageChanged,
-                        )
-                        IconButton(onClick = onStartOver) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Delete chat")
-                        }
-                    } else {
+                    }
+                    // Sliding pill: Translate ↔ Partner icons (right-aligned in both modes).
+                    PartnerModeSwitch(
+                        isPartnerMode = bubble.isPartnerMode,
+                        onToggle = { if (bubble.isPartnerMode) onExitPartnerMode() else onEnterPartnerMode() },
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                    // Language dropdown shown in both modes so language can be switched
+                    // mid-conversation in partner reading as well.
+                    LanguageDropdown(
+                        options = BibleLanguage.entries.distinctBy { it.code },
+                        selected = bubble.bubbleTargetLanguage,
+                        onSelected = onLanguageChanged,
+                    )
+                    if (bubble.isPartnerMode) {
+                        // Push ✕ to the far right in partner mode.
                         Spacer(Modifier.weight(1f))
                     }
+                    // ✕ resets the conversation and closes the panel.
                     TextButton(
-                        onClick = onClose,
+                        onClick = { onStartOver(); onClose() },
                         contentPadding = PaddingValues(horizontal = 6.dp),
                     ) { Text("✕") }
                 }

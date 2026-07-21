@@ -505,23 +505,27 @@ class ReaderViewModel(
 
     // ── Partner Reading orchestration ────────────────────────────────────────
 
-    /** Enter partner reading mode — starts at the verse the current bubble is anchored to. */
+    /** Enter partner reading mode.
+     *
+     * Starts at whichever verse the user last tapped the verse-number of (hoveredVerseId),
+     * falling back to the verse the bubble is anchored to. No odd/even snapping — the AI
+     * reads the anchor verse first, then alternates from there. */
     fun onEnterPartnerMode() {
         val state = _uiState.value
         val bubble = state.chatBubble ?: return
         val verses = state.verses
-        // Find the bubble's verse in the list, then step back to the nearest even-indexed
-        // position so the session always opens with an AI verse (index 0, 2, 4 …).
-        val anchorIdx = verses.indexOfFirst { it.numericVerseId == bubble.verseId }
+        // Prefer the verse the user has highlighted (tapped verse-number); fall back to
+        // the bubble's anchor verse so opening partner mode from a tap always feels intentional.
+        val anchorVerseId = state.hoveredVerseId ?: bubble.verseId
+        val anchorIdx = verses.indexOfFirst { it.numericVerseId == anchorVerseId }
             .coerceAtLeast(0)
-        val aiIdx = if (anchorIdx % 2 == 0) anchorIdx else (anchorIdx - 1).coerceAtLeast(0)
         _uiState.value = state.copy(
             chatBubble = bubble.copy(
                 isPartnerMode = true,
                 partnerMessages = emptyList(),
             ),
         )
-        speakAiPartnerVerse(aiIdx)
+        speakAiPartnerVerse(anchorIdx)
     }
 
     /** Exit partner reading mode, clear all partner highlights. */

@@ -277,7 +277,7 @@ fun VerseRow(
             }
         }
 
-        // ── Action icons: speaker + bookmark ────────────────────────────────
+        // ── Action icons: bookmark (left) + speaker (right) ─────────────────
         // Fade in when the verse number is tapped; fade out on a second tap or when another
         // verse is activated. Compact 28 dp tap targets / 16 dp glyphs so they don't push
         // the verse row height or intrude on reading width.
@@ -288,17 +288,6 @@ fun VerseRow(
         ) {
             Row(verticalAlignment = Alignment.Top) {
                 IconButton(
-                    onClick = onSpeakVerse,
-                    modifier = Modifier.size(28.dp).padding(top = 2.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.VolumeUp,
-                        contentDescription = "Read verse aloud",
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.78f),
-                    )
-                }
-                IconButton(
                     onClick = onToggleBookmark,
                     modifier = Modifier.size(28.dp).padding(top = 2.dp),
                 ) {
@@ -308,6 +297,17 @@ fun VerseRow(
                         modifier = Modifier.size(16.dp),
                         tint = if (isBookmarked) Glass.skyBlue
                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                    )
+                }
+                IconButton(
+                    onClick = onSpeakVerse,
+                    modifier = Modifier.size(28.dp).padding(top = 2.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.VolumeUp,
+                        contentDescription = "Read verse aloud",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.78f),
                     )
                 }
             }
