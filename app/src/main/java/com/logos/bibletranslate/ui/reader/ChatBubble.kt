@@ -326,10 +326,9 @@ fun ChatBubble(
                     CondensedWordRow(bubble, onDefine, onClose)
                     return@Column
                 }
-                // Sticky header.
-                // Two-row header.
-                // Row 1: [Sparkle · VerseRef] in translator mode, or just spacer; ✕ pinned top-right.
-                // Row 2: [Pill][Language] right-aligned under the ✕.
+                // Single-row header.
+                // Translator: [Sparkle · VerseRef(weight)] [Pill] [Language] [✕]
+                // Partner:    [Pill] [Language] [Spacer(weight)] [✕]
                 // ✕ resets *and* closes — it is the single dismiss/reset action.
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -342,29 +341,24 @@ fun ChatBubble(
                             style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier.weight(1f),
                         )
-                    } else {
-                        Spacer(Modifier.weight(1f))
                     }
-                    TextButton(
-                        onClick = { onStartOver(); onClose() },
-                        contentPadding = PaddingValues(horizontal = 6.dp),
-                    ) { Text("✕") }
-                }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.End,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
-                ) {
                     PartnerModeSwitch(
                         isPartnerMode = bubble.isPartnerMode,
                         onToggle = { if (bubble.isPartnerMode) onExitPartnerMode() else onEnterPartnerMode() },
-                        modifier = Modifier.padding(end = 4.dp),
+                        modifier = Modifier.padding(horizontal = 4.dp),
                     )
                     LanguageDropdown(
                         options = BibleLanguage.entries.distinctBy { it.code },
                         selected = bubble.bubbleTargetLanguage,
                         onSelected = onLanguageChanged,
                     )
+                    if (bubble.isPartnerMode) {
+                        Spacer(Modifier.weight(1f))
+                    }
+                    TextButton(
+                        onClick = { onStartOver(); onClose() },
+                        contentPadding = PaddingValues(horizontal = 6.dp),
+                    ) { Text("✕") }
                 }
 
                 Spacer(Modifier.padding(top = if (bubble.isPartnerMode) 1.dp else 3.dp))
