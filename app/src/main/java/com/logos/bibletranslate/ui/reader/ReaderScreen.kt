@@ -226,8 +226,13 @@ fun ReaderScreen(
     // Scroll unconditionally to item 0 so verse 1 is always at the top — even when the new
     // chapter has the same verse count as the old one (indices stay the same, only the content
     // changes, so the LazyColumn would otherwise stay wherever the list was last scrolled to).
+    // A short delay lets the new chapter's items finish composing before the scroll fires,
+    // avoiding a race where scrollToItem(0) runs against the previous chapter's layout.
     LaunchedEffect(uiState.scrollToTopTrigger) {
-        if (uiState.scrollToTopTrigger > 0) listState.scrollToItem(0)
+        if (uiState.scrollToTopTrigger > 0) {
+            delay(80)
+            listState.scrollToItem(0)
+        }
     }
 
     // Deliberately *no* auto-scroll-to-verse when a bubble opens: an animated scroll right as
@@ -679,6 +684,26 @@ fun ReaderScreen(
                     )
                 }
             }
+
+            // Frosted-white scrim at the very top of the content viewport.
+            // Placed last inside the Box so it renders above the verse list.
+            // Covers the floating navbar zone — scripture text softens/fades
+            // as it scrolls upward, giving the frosted-glass look.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(padding.calculateTopPadding() + 18.dp)
+                    .align(Alignment.TopCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            colorStops = arrayOf(
+                                0.0f to Color.White.copy(alpha = 0.92f),
+                                0.55f to Color.White.copy(alpha = 0.55f),
+                                1.0f to Color.Transparent,
+                            ),
+                        ),
+                    ),
+            )
         }
 
         if (showBookChapterPicker) {
