@@ -184,6 +184,14 @@ fun ReaderScreen(
     // Initialise TTS once — hands the engine an application context without leaking into the ViewModel constructor.
     LaunchedEffect(Unit) { viewModel.initTts(context.applicationContext) }
 
+    // One-shot toast events (offline notices, mic errors) — re-fires whenever toastSeq bumps,
+    // even if the message text is identical to the last one shown.
+    LaunchedEffect(uiState.toastSeq) {
+        if (uiState.toastSeq > 0 && uiState.toastMessage != null) {
+            android.widget.Toast.makeText(context, uiState.toastMessage, android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
     // ── RECORD_AUDIO runtime permission ──────────────────────────────────────
     // Required for both partner reading and the chat-input voice mic.
     // We check the current state immediately so buttons are enabled for users who already

@@ -39,8 +39,10 @@ class PartnerSpeechRecognizer {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-                // Prefer on-device recognition where available (Android 13+, Pixel Neural Core etc.)
-                putExtra("android.speech.extra.PREFER_OFFLINE", true)
+                // Deliberately no PREFER_OFFLINE: this app requires a network connection for the
+                // AI window generally, and forcing offline-preferred recognition on a device with
+                // no downloaded offline model for the active locale caused silent, instant
+                // failures that looked like "the mic isn't picking up input" from the user's side.
             }
 
             recognizer.setRecognitionListener(object : RecognitionListener {
@@ -63,9 +65,7 @@ class PartnerSpeechRecognizer {
 
                 override fun onError(error: Int) {
                     recognizer.destroy()
-                    if (cont.isActive) cont.resume(
-                        Result.failure(Exception("SpeechRecognizer error code $error"))
-                    )
+                    if (cont.isActive) cont.resume(Result.failure(Exception(describeError(error))))
                 }
             })
 
@@ -78,4 +78,19 @@ class PartnerSpeechRecognizer {
                 }
             }
         }
+
+    /** Human-readable text for a [SpeechRecognizer] error code, surfaced to the user instead of failing silently. */
+    private fun describeError(error: Int): String = when (error) {
+        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
+            "No internet connection — voice recognition needs one."
+        SpeechRecognizer.ERROR_NO_MATCH -> "Didn't catch that — try again."
+        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Didn't hear anything — try again."
+        SpeechRecognizer.ERROR_AUDIO -> "Microphone error — try again."
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission is required."
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Speech recognizer is busy — try again in a moment."
+        SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED, SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ->
+            "This language isn't supported for voice input on this device."
+        SpeechRecognizer.ERROR_SERVER, SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> "Speech service error — try again."
+        else -> "Voice recognition failed (code $error)."
+    }
 }

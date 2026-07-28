@@ -194,6 +194,10 @@ data class ReaderUiState(
     val partnerHighlightVerseId: Long? = null,
     /** True = AI's verse (first accent color); false = user's verse (last accent color). */
     val partnerHighlightIsAi: Boolean? = null,
+    /** One-shot toast text (offline notices, mic errors) — paired with [toastSeq] so the same message can fire twice in a row. */
+    val toastMessage: String? = null,
+    /** Bumped every time [toastMessage] is (re)set, so the UI's LaunchedEffect always re-fires. */
+    val toastSeq: Int = 0,
 )
 
 class ReaderViewModel(
@@ -497,6 +501,7 @@ class ReaderViewModel(
             result?.onSuccess { transcript ->
                 if (transcript.isNotBlank()) onFollowUpInputChanged(transcript)
             }
+            result?.onFailure { err -> showToast(err.message ?: "Voice recognition failed.") }
         }
     }
 
@@ -511,6 +516,11 @@ class ReaderViewModel(
      * falling back to the verse the bubble is anchored to. No odd/even snapping — the AI
      * reads the anchor verse first, then alternates from there. */
     fun onEnterPartnerMode() {
+        val ctx = appContext
+        if (ctx != null && !NetworkUtils.isOnline(ctx)) {
+            showToast("You're offline — partner reading needs an internet connection.")
+            return
+        }
         val state = _uiState.value
         val bubble = state.chatBubble ?: return
         val verses = state.verses
@@ -552,7 +562,10 @@ class ReaderViewModel(
             val result = recognizer?.listenOnce(ctx, langTag) ?: return@launch
             result.fold(
                 onSuccess = { transcript -> handlePartnerTranscript(transcript) },
-                onFailure = { setPartnerTurn(PartnerTurn.AWAITING_USER) },
+                onFailure = { err ->
+                    showToast(err.message ?: "Voice recognition failed.")
+                    setPartnerTurn(PartnerTurn.AWAITING_USER)
+                },
             )
         }
     }
@@ -619,7 +632,10 @@ class ReaderViewModel(
                     }
                 }
             },
-            onFailure = { setPartnerTurn(PartnerTurn.AWAITING_USER) },
+            onFailure = { err ->
+                showToast(err.message ?: "Couldn't judge that reading — try again.")
+                setPartnerTurn(PartnerTurn.AWAITING_USER)
+            },
         )
     }
 
@@ -1093,7 +1109,20 @@ class ReaderViewModel(
         return bubble.copy(wordInfo = null)
     }
 
+    /** Surfaces a one-shot message via the toast event fields — offline notices, mic errors, etc. */
+    private fun showToast(message: String) {
+        val cur = _uiState.value
+        _uiState.value = cur.copy(toastMessage = message, toastSeq = cur.toastSeq + 1)
+    }
+
     private fun updateSelection(verseId: Long, range: IntRange) {
+        // The AI window (translation + chat + partner mode) needs a live network end to end —
+        // it must not even open offline rather than open into a dead/broken state.
+        val ctx = appContext
+        if (ctx != null && !NetworkUtils.isOnline(ctx)) {
+            showToast("You're offline — the AI window needs an internet connection.")
+            return
+        }
         // Starting a new word selection means the user has moved on from wherever a verse
         // search last landed them — clear that highlight rather than leaving it pulsing
         // somewhere off-screen. Cleared before capturing `state` so the copies below don't
