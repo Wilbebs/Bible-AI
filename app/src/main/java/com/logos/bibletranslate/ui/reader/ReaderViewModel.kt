@@ -199,6 +199,14 @@ data class ReaderUiState(
     val toastMessage: String? = null,
     /** Bumped every time [toastMessage] is (re)set, so the UI's LaunchedEffect always re-fires. */
     val toastSeq: Int = 0,
+
+    // ── Languages settings window ────────────────────────────────────────────
+    /** True while the full-screen "Languages" settings window is open (Settings gear → Languages). */
+    val showLanguagesWindow: Boolean = false,
+    /** Downloadable-only languages currently present on disk, in addition to [BibleLanguage.DEFAULT_DOWNLOADED]. */
+    val downloadedLanguages: Set<BibleLanguage> = emptySet(),
+    /** Downloadable-only languages with a fetch currently in flight — drives the spinner per row. */
+    val languagesDownloading: Set<BibleLanguage> = emptySet(),
 )
 
 class ReaderViewModel(
@@ -220,6 +228,8 @@ class ReaderViewModel(
     private var recognizer: PartnerSpeechRecognizer? = null
     /** Application context stored during initTts — needed for speech recognition. */
     private var appContext: Context? = null
+    /** Fetches downloadable-only translation DBs on demand — created lazily alongside [appContext]. */
+    private var downloadManager: TranslationDownloadManager? = null
 
     /** Guards against a stale live-call result overwriting a newer selection. */
     private var liveCallRequestId = 0
@@ -450,7 +460,57 @@ class ReaderViewModel(
             appContext = appCtx
             tts = VerseTextToSpeech(appCtx)
             recognizer = PartnerSpeechRecognizer()
+            downloadManager = TranslationDownloadManager(appCtx)
+            _uiState.value = _uiState.value.copy(
+                downloadedLanguages = BibleLanguage.entries
+                    .filter { !it.isBundledByDefault && downloadManager!!.isAvailable(it) }
+                    .toSet(),
+            )
         }
+    }
+
+    // ── Languages settings window ────────────────────────────────────────────
+
+    fun onOpenLanguagesWindow() {
+        _uiState.value = _uiState.value.copy(showLanguagesWindow = true)
+    }
+
+    fun onCloseLanguagesWindow() {
+        _uiState.value = _uiState.value.copy(showLanguagesWindow = false)
+    }
+
+    /** Downloads a not-yet-available translation; no-op if it's bundled or already downloaded/downloading. */
+    fun onDownloadLanguage(language: BibleLanguage) {
+        if (language.isBundledByDefault) return
+        val cur = _uiState.value
+        if (language in cur.downloadedLanguages || language in cur.languagesDownloading) return
+        val manager = downloadManager ?: return
+        _uiState.value = cur.copy(languagesDownloading = cur.languagesDownloading + language)
+        viewModelScope.launch {
+            val result = manager.download(language)
+            val latest = _uiState.value
+            result.fold(
+                onSuccess = {
+                    _uiState.value = latest.copy(
+                        downloadedLanguages = latest.downloadedLanguages + language,
+                        languagesDownloading = latest.languagesDownloading - language,
+                    )
+                },
+                onFailure = { err ->
+                    _uiState.value = latest.copy(languagesDownloading = latest.languagesDownloading - language)
+                    showToast(err.message ?: "Download failed — check your connection and try again.")
+                },
+            )
+        }
+    }
+
+    /** Deletes a previously-downloaded translation to free space; no-op for bundled-by-default languages. */
+    fun onDeleteDownloadedLanguage(language: BibleLanguage) {
+        if (language.isBundledByDefault) return
+        val manager = downloadManager ?: return
+        manager.delete(language)
+        val cur = _uiState.value
+        _uiState.value = cur.copy(downloadedLanguages = cur.downloadedLanguages - language)
     }
 
     /** Tapping the verse number shows/hides the action icons for that verse.

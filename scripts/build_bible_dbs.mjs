@@ -10,28 +10,31 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const OUT_DIR = path.join(__dirname, "..", "app", "src", "main", "assets", "bibles");
+const BUNDLED_OUT_DIR = path.join(__dirname, "..", "app", "src", "main", "assets", "bibles");
+// Downloadable-only translations are deliberately NOT under app/src/main/assets — anything in
+// assets/ gets packaged into the APK. These live at the repo root instead, fetched at runtime
+// over HTTPS from this repo's raw GitHub content (see TranslationDownloadManager.kt), so the
+// app ships small and users opt in per-language.
+const DOWNLOADABLE_OUT_DIR = path.join(__dirname, "..", "bible_downloads");
 
-const SOURCES = [
-  // Original three reading languages (plan §3).
+// Bundled in the APK by default — matches BibleLanguage.DEFAULT_DOWNLOADED in the Kotlin enum.
+// Keep this list and that one in sync.
+const BUNDLED_SOURCES = [
   { lang: "en", abbr: "kjv", file: "kjv.db", url: "https://api.getbible.net/v2/kjv.json" },
-  { lang: "es", abbr: "valera", file: "rv1909.db", url: "https://api.getbible.net/v2/valera.json" },
-  { lang: "pt", abbr: "almeida", file: "almeida1911.db", url: "https://api.getbible.net/v2/almeida.json" },
-
-  // Simpler/modern-register alternatives, confirmed public domain.
   { lang: "en", abbr: "web", file: "web.db", url: "https://api.getbible.net/v2/web.json" }, // World English Bible — PD, modern easy English (the closest legitimate NIV-alternative)
-  { lang: "en", abbr: "basicenglish", file: "bbe.db", url: "https://api.getbible.net/v2/basicenglish.json" }, // Bible in Basic English — PD, restricted ~1000-word vocabulary
-
-  // Original-language texts, confirmed public domain.
-  { lang: "hbo", abbr: "codex", file: "wlc_hebrew.db", url: "https://api.getbible.net/v2/codex.json" }, // Westminster Leningrad Codex — Hebrew OT
+  { lang: "es", abbr: "valera", file: "rv1909.db", url: "https://api.getbible.net/v2/valera.json" },
   { lang: "grc", abbr: "tischendorf", file: "tischendorf_greek.db", url: "https://api.getbible.net/v2/tischendorf.json" }, // Tischendorf 8th Ed — Greek NT (PD; Textus Receptus/Westcott-Hort in this dataset are CC BY-NC-SA, deliberately skipped)
+  { lang: "zh", abbr: "chiunl", file: "chiunl_chinese.db", url: "https://api.getbible.net/v2/chiunl.json" }, // 聖經 (文理和合) Wenli Union Version, 1919 — PD. Literary/classical Chinese, not modern Mandarin vernacular; it's the only PD Chinese text getbible has — no PD Chinese Union Version (和合本) was found.
+];
+
+// Everything else — user downloads these on demand from the Languages settings window.
+const DOWNLOADABLE_SOURCES = [
+  { lang: "en", abbr: "basicenglish", file: "bbe.db", url: "https://api.getbible.net/v2/basicenglish.json" }, // Bible in Basic English — PD, restricted ~1000-word vocabulary
+  { lang: "pt", abbr: "almeida", file: "almeida1911.db", url: "https://api.getbible.net/v2/almeida.json" },
+  { lang: "pt", abbr: "livre", file: "biblia_livre_pt.db", url: "https://api.getbible.net/v2/livre.json" }, // Bíblia Livre — CC BY 3.0 Brazil, simpler/modern Portuguese (deliberate exception to PD-only rule, user-approved)
+  { lang: "hbo", abbr: "codex", file: "wlc_hebrew.db", url: "https://api.getbible.net/v2/codex.json" }, // Westminster Leningrad Codex — Hebrew OT
   { lang: "syr", abbr: "peshitta", file: "peshitta_aramaic.db", url: "https://api.getbible.net/v2/peshitta.json" }, // Peshitta — Aramaic/Syriac NT
   { lang: "la", abbr: "vulgate", file: "vulgate_latin.db", url: "https://api.getbible.net/v2/vulgate.json" }, // Clementine Vulgate — Latin, full OT+NT
-
-  // Deliberate exception to the PD-only rule (user-approved): CC BY 3.0
-  // Brazil, not public domain, but permissive (commercial use ok, attribution
-  // required) — the only meaningfully more-modern Portuguese option found.
-  { lang: "pt", abbr: "livre", file: "biblia_livre_pt.db", url: "https://api.getbible.net/v2/livre.json" }, // Bíblia Livre — CC BY 3.0 Brazil, simpler/modern Portuguese
 ];
 
 async function fetchTranslation(url) {
@@ -72,15 +75,22 @@ function buildDb(outPath, translation) {
   return { books: translation.books.length, verses: verseCount };
 }
 
-async function main() {
-  for (const src of SOURCES) {
+async function buildAll(sources, outDir) {
+  for (const src of sources) {
     console.log(`Fetching ${src.abbr} (${src.lang})...`);
     const translation = await fetchTranslation(src.url);
-    const outPath = path.join(OUT_DIR, src.file);
+    const outPath = path.join(outDir, src.file);
     const stats = buildDb(outPath, translation);
     console.log(`  -> ${src.file}: ${stats.books} books, ${stats.verses} verses`);
   }
-  console.log("Done. Databases written to", OUT_DIR);
+}
+
+async function main() {
+  console.log("-- Bundled (shipped in the APK) --");
+  await buildAll(BUNDLED_SOURCES, BUNDLED_OUT_DIR);
+  console.log("-- Downloadable (fetched on demand) --");
+  await buildAll(DOWNLOADABLE_SOURCES, DOWNLOADABLE_OUT_DIR);
+  console.log("Done.", BUNDLED_OUT_DIR, "/", DOWNLOADABLE_OUT_DIR);
 }
 
 main().catch((err) => {

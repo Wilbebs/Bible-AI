@@ -459,7 +459,11 @@ fun ReaderScreen(
                             // Language picker: same liquid-glass treatment but tinted sky-blue.
                             CompactReadingLanguagePicker(
                                 selected = uiState.language,
-                                options = BibleLanguage.entries,
+                                // Only offer languages actually present on disk — anything
+                                // downloadable-only and not yet fetched would crash the DB open.
+                                options = BibleLanguage.entries.filter {
+                                    it.isBundledByDefault || it in uiState.downloadedLanguages
+                                },
                                 onSelected = viewModel::onLanguageSelected,
                             )
                             // Search field fills the remaining horizontal space — the pill
@@ -520,6 +524,13 @@ fun ReaderScreen(
                                                 onToggle = { Glass.toggleDarkMode() },
                                             )
                                         }
+                                        DropdownMenuItem(
+                                            text = { Text("Languages") },
+                                            onClick = {
+                                                showSettingsMenu = false
+                                                viewModel.onOpenLanguagesWindow()
+                                            },
+                                        )
                                     }
                                 }
                                 AccentMarble(theme = AccentTheme.SkyDeep)
@@ -691,6 +702,16 @@ fun ReaderScreen(
                     modifier = Modifier.fillMaxSize().padding(top = padding.calculateTopPadding()),
                     )
                 }
+            }
+
+            if (uiState.showLanguagesWindow) {
+                LanguagesSettingsWindow(
+                    downloadedLanguages = uiState.downloadedLanguages,
+                    downloadingLanguages = uiState.languagesDownloading,
+                    onClose = viewModel::onCloseLanguagesWindow,
+                    onDownload = viewModel::onDownloadLanguage,
+                    onDelete = viewModel::onDeleteDownloadedLanguage,
+                )
             }
 
             // Frosted-white scrim at the very top of the content viewport.
