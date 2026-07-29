@@ -18,6 +18,7 @@ import com.logos.bibletranslate.data.GeminiLiveTranslateClient
 import com.logos.bibletranslate.data.GoogleTranslateLiveClient
 import com.logos.bibletranslate.data.LiveTranslationCache
 import com.logos.bibletranslate.data.MAX_CHAT_EXCHANGES
+import com.logos.bibletranslate.data.NetworkUtils
 import com.logos.bibletranslate.data.VerseChatCache
 import com.logos.bibletranslate.data.VerseChatClient
 import com.logos.bibletranslate.data.VerseData
