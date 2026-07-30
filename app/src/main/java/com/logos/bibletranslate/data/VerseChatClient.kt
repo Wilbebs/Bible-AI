@@ -200,7 +200,11 @@ class VerseChatClient {
             Set "kind" to one of those two exact strings.
             Set "reply":
             - READ_ATTEMPT → always the empty string "" (nothing is spoken; the app just moves on)
-            - QUESTION_OR_STATEMENT → a concise, helpful answer in $sourceLangName, staying focused on the Bible passage
+            - QUESTION_OR_STATEMENT → respond naturally and conversationally in $sourceLangName,
+              like a knowledgeable, warm reading companion would. Answer whatever they actually
+              asked or said — use your own judgment about how to be helpful here rather than
+              forcing every reply back onto the current verse; if they go off-topic, engage with
+              that genuinely instead of redirecting them back to the passage.
         """.trimIndent()
         return callGemini(apiKey, system, emptyList(), spokenText, PARTNER_JUDGMENT_SCHEMA)
             .mapCatching { json ->

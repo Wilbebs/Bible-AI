@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.logos.bibletranslate.data.ApiKeys
-import com.logos.bibletranslate.data.GeminiVoiceSpeaker
+import com.logos.bibletranslate.data.CloudVoiceSpeaker
 import com.logos.bibletranslate.data.BibleLanguage
 import com.logos.bibletranslate.data.PartnerJudgmentKind
 import com.logos.bibletranslate.data.PartnerSpeechRecognizer
@@ -235,7 +235,7 @@ class ReaderViewModel(
     val uiState: StateFlow<ReaderUiState> = _uiState.asStateFlow()
 
     /** TTS engine — lazily initialised from the composable via [initTts]; released in [onCleared]. */
-    private var tts: GeminiVoiceSpeaker? = null
+    private var tts: CloudVoiceSpeaker? = null
     /** Speech recogniser for partner reading — created once alongside TTS. */
     private var recognizer: PartnerSpeechRecognizer? = null
     /** Application context stored during initTts — needed for speech recognition. */
@@ -470,7 +470,7 @@ class ReaderViewModel(
         if (tts == null) {
             val appCtx = context.applicationContext
             appContext = appCtx
-            tts = GeminiVoiceSpeaker(appCtx) { message -> showToast(message) }
+            tts = CloudVoiceSpeaker(appCtx) { message -> showToast(message) }
             recognizer = PartnerSpeechRecognizer()
             downloadManager = TranslationDownloadManager(appCtx)
             _uiState.value = _uiState.value.copy(
@@ -641,7 +641,7 @@ class ReaderViewModel(
      *  played — the user reads those aloud themselves. Called this often, a verse that entered
      *  the window several verses back has had several verse-durations of wall-clock time to
      *  finish, while one that just entered the window is still in flight — exactly the rolling
-     *  pipeline effect wanted. [GeminiVoiceSpeaker.prefetch] already no-ops anything already
+     *  pipeline effect wanted. [CloudVoiceSpeaker.prefetch] already no-ops anything already
      *  cached or in flight, so calling this on every single verse start re-requests nothing. */
     private fun refreshPartnerPrefetchWindow() {
         val state = _uiState.value
@@ -1462,6 +1462,13 @@ class ReaderViewModel(
             isLoading = false,
             highlightedVerseId = highlightedVerseId,
             scrollToTopTrigger = _uiState.value.scrollToTopTrigger + 1,
+            // This is a fresh ReaderUiState(), not a .copy() — every field not listed here resets
+            // to its default. downloadedLanguages/languagesDownloading reflect actual on-disk
+            // state, not per-chapter navigation state, so they must survive every navigation
+            // (book/chapter picker, search jump, language switch) or a downloaded translation
+            // silently vanishes from the language picker the moment the user changes chapters.
+            downloadedLanguages = _uiState.value.downloadedLanguages,
+            languagesDownloading = _uiState.value.languagesDownloading,
         )
     }
 

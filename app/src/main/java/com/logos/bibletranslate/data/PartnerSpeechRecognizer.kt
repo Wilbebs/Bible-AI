@@ -49,6 +49,16 @@ class PartnerSpeechRecognizer {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                    // The default silence-based endpointer (~2s of quiet ends the utterance) was
+                    // cutting people off mid-verse — a natural comma/breath pause while reading a
+                    // whole Bible verse aloud is easily that long. Extending it gives a real pause
+                    // before the recognizer decides the verse is finished. Not all OEM recognizer
+                    // implementations honor these (they're a request, not a guarantee), but
+                    // Google's own recognizer — what's on the overwhelming majority of devices —
+                    // does.
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3500L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 3500L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 2000L)
                     // Deliberately no PREFER_OFFLINE: this app requires a network connection for
                     // the AI window generally, and forcing offline-preferred recognition on a
                     // device with no downloaded offline model for the active locale caused
