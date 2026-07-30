@@ -458,7 +458,7 @@ class ReaderViewModel(
         if (tts == null) {
             val appCtx = context.applicationContext
             appContext = appCtx
-            tts = GeminiVoiceSpeaker(appCtx)
+            tts = GeminiVoiceSpeaker(appCtx) { message -> showToast(message) }
             recognizer = PartnerSpeechRecognizer()
             downloadManager = TranslationDownloadManager(appCtx)
             _uiState.value = _uiState.value.copy(

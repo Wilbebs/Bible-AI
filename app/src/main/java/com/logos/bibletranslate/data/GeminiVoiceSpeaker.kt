@@ -17,19 +17,26 @@ import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-private const val TTS_MODEL = "gemini-2.5-flash-preview-tts"
+private const val TTS_MODEL = "gemini-3.1-flash-tts-preview"
+/** Falls back to this if the newer model rejects the request (e.g. not yet enabled on this key's project). */
+private const val TTS_MODEL_FALLBACK = "gemini-2.5-flash-preview-tts"
 
 /**
  * Reads text aloud with a real Gemini AI voice (native audio generation) instead of Android's
- * built-in, robotic-sounding TextToSpeech engine — replaces [VerseTextToSpeech] everywhere in
- * the app (verse speaker icons, AI chat replies, partner-reading turns) since every one of
+ * built-in, robotic-sounding TextToSpeech engine — replaces the old VerseTextToSpeech everywhere
+ * in the app (verse speaker icons, AI chat replies, partner-reading turns) since every one of
  * those call sites already requires the app to be online with a Gemini key configured.
  *
  * Same fire-and-forget shape as the engine it replaces: [speak] is not suspend, starts its own
  * network + playback job, and a new call cancels whatever the previous one was doing (mirrors
  * the old engine's QUEUE_FLUSH behaviour) so overlapping taps can't talk over each other.
+ *
+ * [onError] fires (in addition to [Companion]-less [speak]'s [onDone]) whenever a request or
+ * playback failure happens — a request that silently did nothing used to be indistinguishable
+ * from "the AI voice sounds robotic" if a caller ended up hearing nothing at all; now the
+ * caller can surface the real reason instead of guessing.
  */
-class GeminiVoiceSpeaker(private val context: Context) {
+class GeminiVoiceSpeaker(private val context: Context, private val onError: (String) -> Unit = {}) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
@@ -48,15 +55,24 @@ class GeminiVoiceSpeaker(private val context: Context) {
         }
         val apiKey = ApiKeys.geminiApiKey
         if (apiKey == null) {
+            onError("No Gemini API key configured — can't generate a voice.")
             onDone?.invoke()
             return
         }
         job = scope.launch {
-            val result = fetchAudio(apiKey, text, voiceFor(languageCode))
+            var result = fetchAudio(apiKey, text, voiceFor(languageCode), TTS_MODEL)
+            if (result.isFailure) {
+                // Retry once against the older, more broadly-enabled model before giving up —
+                // some API keys/projects haven't been granted the newest preview model yet.
+                result = fetchAudio(apiKey, text, voiceFor(languageCode), TTS_MODEL_FALLBACK)
+            }
             withContext(Dispatchers.Main) {
                 result.fold(
                     onSuccess = { pcm -> playPcm(pcm, onDone) },
-                    onFailure = { onDone?.invoke() },
+                    onFailure = { err ->
+                        onError(err.message ?: "Voice generation failed.")
+                        onDone?.invoke()
+                    },
                 )
             }
         }
@@ -71,10 +87,10 @@ class GeminiVoiceSpeaker(private val context: Context) {
 
     fun shutdown() = stop()
 
-    private suspend fun fetchAudio(apiKey: String, text: String, voiceName: String): Result<ByteArray> =
+    private suspend fun fetchAudio(apiKey: String, text: String, voiceName: String, model: String): Result<ByteArray> =
         withContext(Dispatchers.IO) {
             try {
-                val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$TTS_MODEL:generateContent?key=$apiKey")
+                val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey")
                 val connection = url.openConnection() as HttpURLConnection
                 connection.requestMethod = "POST"
                 connection.setRequestProperty("Content-Type", "application/json")
@@ -101,7 +117,10 @@ class GeminiVoiceSpeaker(private val context: Context) {
                 connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
 
                 if (connection.responseCode !in 200..299) {
-                    return@withContext Result.failure(Exception("Gemini voice request failed: HTTP ${connection.responseCode}"))
+                    val errorBody = runCatching { connection.errorStream?.bufferedReader()?.use { it.readText() } }.getOrNull()
+                    return@withContext Result.failure(
+                        Exception("Gemini voice request failed: HTTP ${connection.responseCode}${errorBody?.let { " — ${it.take(200)}" } ?: ""}"),
+                    )
                 }
                 val responseText = connection.inputStream.bufferedReader().use { it.readText() }
                 val json = JSONObject(responseText)
@@ -125,6 +144,7 @@ class GeminiVoiceSpeaker(private val context: Context) {
         try {
             wavFile.writeBytes(wavHeader(pcm.size) + pcm)
         } catch (e: Exception) {
+            onError("Couldn't save the voice audio: ${e.message}")
             onDone?.invoke()
             return
         }
@@ -138,10 +158,11 @@ class GeminiVoiceSpeaker(private val context: Context) {
                 if (player === it) player = null
                 onDone?.invoke()
             }
-            mp.setOnErrorListener { errored, _, _ ->
+            mp.setOnErrorListener { errored, what, extra ->
                 errored.release()
                 wavFile.delete()
                 if (player === errored) player = null
+                onError("Voice playback failed (code $what/$extra).")
                 onDone?.invoke()
                 true
             }
@@ -151,6 +172,7 @@ class GeminiVoiceSpeaker(private val context: Context) {
             mp.release()
             wavFile.delete()
             player = null
+            onError("Couldn't play the voice audio: ${e.message}")
             onDone?.invoke()
         }
     }
