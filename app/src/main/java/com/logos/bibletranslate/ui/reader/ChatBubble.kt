@@ -598,23 +598,11 @@ fun ChatBubble(
                         Modifier.padding(top = 10.dp).offset(x = (-6).dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // Mic button: taps fill the input with a speech transcript via the
-                        // ViewModel's speech recognizer (free-form voice input, not partner mode).
-                        IconButton(
-                            onClick = onChatMicTapped,
-                            modifier = Modifier
-                                .size(36.dp)
-                                .padding(end = 4.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Mic,
-                                contentDescription = "Voice input",
-                                modifier = Modifier.size(18.dp),
-                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                            )
-                        }
                         // Pill-shaped glass input with a slow, static (non-rotating) sky-blue/
                         // deep-blue pulse around the ring — the "Gemini is ready" affordance.
+                        // The mic now lives inside the field itself (trailing, next to send)
+                        // instead of as a separate button outside it, so the field gets to use
+                        // nearly the whole row's width instead of losing a fixed 36dp to it.
                         TextField(
                             value = inputValue,
                             onValueChange = {
@@ -649,24 +637,45 @@ fun ChatBubble(
                             // shown suggestion (unchanged). Non-blank: sends what's typed,
                             // replacing the old dedicated button 1:1.
                             trailingIcon = {
-                                val canSend = inputValue.text.isNotBlank() && !bubble.isSendingFollowUp
-                                IconButton(
-                                    onClick = { if (inputValue.text.isBlank()) onChipTapped(currentSuggestion) else onSend() },
-                                    enabled = inputValue.text.isBlank() || canSend,
-                                ) {
-                                    Icon(
-                                        Icons.AutoMirrored.Filled.ArrowForward,
-                                        contentDescription = if (inputValue.text.isBlank()) "Ask: $currentSuggestion" else "Send",
-                                        tint = if (inputValue.text.isBlank() || canSend) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                                        },
-                                    )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    // Mic button: taps fill the input with a speech transcript
+                                    // via the ViewModel's speech recognizer (free-form voice
+                                    // input, not partner mode) — moved in from outside the field.
+                                    IconButton(
+                                        onClick = onChatMicTapped,
+                                        enabled = !bubble.chatMicListening,
+                                        modifier = Modifier.size(36.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Mic,
+                                            contentDescription = "Voice input",
+                                            modifier = Modifier.size(18.dp),
+                                            tint = if (bubble.chatMicListening) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                            },
+                                        )
+                                    }
+                                    val canSend = inputValue.text.isNotBlank() && !bubble.isSendingFollowUp
+                                    IconButton(
+                                        onClick = { if (inputValue.text.isBlank()) onChipTapped(currentSuggestion) else onSend() },
+                                        enabled = inputValue.text.isBlank() || canSend,
+                                    ) {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.ArrowForward,
+                                            contentDescription = if (inputValue.text.isBlank()) "Ask: $currentSuggestion" else "Send",
+                                            tint = if (inputValue.text.isBlank() || canSend) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                            },
+                                        )
+                                    }
                                 }
                             },
                             modifier = Modifier
-                                .weight(1f)
+                                .fillMaxWidth()
                                 .clip(Glass.pillShape)
                                 // Theme-aware (was hardcoded white, which glared in dark mode).
                                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f), Glass.pillShape)

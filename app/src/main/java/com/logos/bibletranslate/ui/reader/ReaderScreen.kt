@@ -64,6 +64,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -465,6 +466,7 @@ fun ReaderScreen(
                                     it.isBundledByDefault || it in uiState.downloadedLanguages
                                 },
                                 onSelected = viewModel::onLanguageSelected,
+                                onAddLanguage = viewModel::onOpenLanguagesWindow,
                             )
                             // Search field fills the remaining horizontal space — the pill
                             // stretches edge-to-edge inside the row rather than being a fixed
@@ -711,6 +713,9 @@ fun ReaderScreen(
                     onClose = viewModel::onCloseLanguagesWindow,
                     onDownload = viewModel::onDownloadLanguage,
                     onDelete = viewModel::onDeleteDownloadedLanguage,
+                    // Without this the window's own 25dp top inset is measured against the full
+                    // screen and its title/close button end up sitting behind the floating navbar.
+                    modifier = Modifier.padding(top = padding.calculateTopPadding()),
                 )
             }
 
@@ -1162,10 +1167,15 @@ private fun CompactReadingLanguagePicker(
     selected: BibleLanguage,
     options: List<BibleLanguage>,
     onSelected: (BibleLanguage) -> Unit,
+    onAddLanguage: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
     val haptics = LocalHapticFeedback.current
+    val filtered = remember(options, query) {
+        if (query.isBlank()) options else options.filter { it.displayNameWithTranslation.contains(query, ignoreCase = true) }
+    }
     // Liquid-glass tinted pill: skyBlue at reduced opacity so the glass background
     // shows through, consistent with the frosted feel of the other controls.
     Box(modifier) {
@@ -1193,8 +1203,31 @@ private fun CompactReadingLanguagePicker(
                 modifier = Modifier.size(16.dp),
             )
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            options.forEach { language ->
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false; query = "" }) {
+            Row(
+                modifier = Modifier
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .width(200.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                BasicTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
+                    modifier = Modifier.fillMaxWidth(),
+                    decorationBox = { inner ->
+                        if (query.isEmpty()) {
+                            Text("Search languages", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        inner()
+                    },
+                )
+            }
+            Divider()
+            filtered.forEach { language ->
                 DropdownMenuItem(
                     // Show "English (KJV)" / "Español (Reina Valera)" so users know which
                     // Bible version they're switching to, not just the language name.
@@ -1202,9 +1235,19 @@ private fun CompactReadingLanguagePicker(
                     onClick = {
                         onSelected(language)
                         expanded = false
+                        query = ""
                     },
                 )
             }
+            if (filtered.isNotEmpty()) Divider()
+            DropdownMenuItem(
+                text = { Text("Add Language", color = MaterialTheme.colorScheme.primary) },
+                onClick = {
+                    expanded = false
+                    query = ""
+                    onAddLanguage()
+                },
+            )
         }
     }
 }

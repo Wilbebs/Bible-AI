@@ -21,63 +21,81 @@ import kotlin.coroutines.resume
  */
 class PartnerSpeechRecognizer {
 
+    /** The one session Android's speech service allows system-wide at a time. Tracked here so a
+     *  fresh tap can force-clear a prior session that never got a callback (a stuck permission
+     *  dialog, a device quirk) instead of failing every future tap with ERROR_RECOGNIZER_BUSY
+     *  forever — that used to be a real, unrecoverable-without-restart bug. */
+    private var activeRecognizer: SpeechRecognizer? = null
+
     /**
      * Captures one utterance and returns the best transcript.
      * @param context Application context (not Activity) — no leak risk.
      * @param languageTag BCP-47 tag matching the reading language (e.g. "en-US", "es-ES").
      */
-    suspend fun listenOnce(context: Context, languageTag: String = "en-US"): Result<String> =
-        suspendCancellableCoroutine { cont ->
-            if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-                cont.resume(Result.failure(Exception("Speech recognition not available on this device")))
-                return@suspendCancellableCoroutine
-            }
-
-            val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
-
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-                // Deliberately no PREFER_OFFLINE: this app requires a network connection for the
-                // AI window generally, and forcing offline-preferred recognition on a device with
-                // no downloaded offline model for the active locale caused silent, instant
-                // failures that looked like "the mic isn't picking up input" from the user's side.
-            }
-
-            recognizer.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) {}
-                override fun onBeginningOfSpeech() {}
-                override fun onRmsChanged(rmsdB: Float) {}
-                override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() {}
-                override fun onPartialResults(partial: Bundle?) {}
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-
-                override fun onResults(results: Bundle?) {
-                    val transcript = results
-                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        ?.firstOrNull()
-                        ?: ""
-                    recognizer.destroy()
-                    if (cont.isActive) cont.resume(Result.success(transcript))
-                }
-
-                override fun onError(error: Int) {
-                    recognizer.destroy()
-                    if (cont.isActive) cont.resume(Result.failure(Exception(describeError(error))))
-                }
-            })
-
-            recognizer.startListening(intent)
-
-            cont.invokeOnCancellation {
-                runCatching {
-                    recognizer.stopListening()
-                    recognizer.destroy()
-                }
-            }
+    suspend fun listenOnce(context: Context, languageTag: String = "en-US"): Result<String> {
+        activeRecognizer?.let { stale ->
+            runCatching { stale.stopListening(); stale.destroy() }
+            activeRecognizer = null
         }
+        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+            return Result.failure(Exception("Speech recognition not available on this device"))
+        }
+        return try {
+            suspendCancellableCoroutine { cont ->
+                val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
+                activeRecognizer = recognizer
+
+                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
+                    putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                    // Deliberately no PREFER_OFFLINE: this app requires a network connection for
+                    // the AI window generally, and forcing offline-preferred recognition on a
+                    // device with no downloaded offline model for the active locale caused
+                    // silent, instant failures that looked like a dead mic from the user's side.
+                }
+
+                fun finish(result: Result<String>) {
+                    recognizer.destroy()
+                    if (activeRecognizer === recognizer) activeRecognizer = null
+                    if (cont.isActive) cont.resume(result)
+                }
+
+                recognizer.setRecognitionListener(object : RecognitionListener {
+                    override fun onReadyForSpeech(params: Bundle?) {}
+                    override fun onBeginningOfSpeech() {}
+                    override fun onRmsChanged(rmsdB: Float) {}
+                    override fun onBufferReceived(buffer: ByteArray?) {}
+                    override fun onEndOfSpeech() {}
+                    override fun onPartialResults(partial: Bundle?) {}
+                    override fun onEvent(eventType: Int, params: Bundle?) {}
+
+                    override fun onResults(results: Bundle?) {
+                        val transcript = results
+                            ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                            ?.firstOrNull()
+                            ?: ""
+                        finish(Result.success(transcript))
+                    }
+
+                    override fun onError(error: Int) {
+                        finish(Result.failure(Exception(describeError(error))))
+                    }
+                })
+
+                recognizer.startListening(intent)
+
+                cont.invokeOnCancellation {
+                    runCatching { recognizer.stopListening(); recognizer.destroy() }
+                    if (activeRecognizer === recognizer) activeRecognizer = null
+                }
+            }
+        } catch (e: Exception) {
+            activeRecognizer?.let { runCatching { it.destroy() } }
+            activeRecognizer = null
+            Result.failure(e)
+        }
+    }
 
     /** Human-readable text for a [SpeechRecognizer] error code, surfaced to the user instead of failing silently. */
     private fun describeError(error: Int): String = when (error) {

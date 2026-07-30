@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.logos.bibletranslate.data.ApiKeys
-import com.logos.bibletranslate.data.VerseTextToSpeech
+import com.logos.bibletranslate.data.GeminiVoiceSpeaker
 import com.logos.bibletranslate.data.BibleLanguage
 import com.logos.bibletranslate.data.PartnerJudgmentKind
 import com.logos.bibletranslate.data.PartnerSpeechRecognizer
@@ -223,7 +223,7 @@ class ReaderViewModel(
     val uiState: StateFlow<ReaderUiState> = _uiState.asStateFlow()
 
     /** TTS engine — lazily initialised from the composable via [initTts]; released in [onCleared]. */
-    private var tts: VerseTextToSpeech? = null
+    private var tts: GeminiVoiceSpeaker? = null
     /** Speech recogniser for partner reading — created once alongside TTS. */
     private var recognizer: PartnerSpeechRecognizer? = null
     /** Application context stored during initTts — needed for speech recognition. */
@@ -458,7 +458,7 @@ class ReaderViewModel(
         if (tts == null) {
             val appCtx = context.applicationContext
             appContext = appCtx
-            tts = VerseTextToSpeech(appCtx)
+            tts = GeminiVoiceSpeaker(appCtx)
             recognizer = PartnerSpeechRecognizer()
             downloadManager = TranslationDownloadManager(appCtx)
             _uiState.value = _uiState.value.copy(
@@ -610,6 +610,17 @@ class ReaderViewModel(
         )
     }
 
+    /** Called right after the turn flips to AWAITING_USER — starts listening immediately so the
+     *  user doesn't have to tap the mic every single turn, matching a real back-and-forth
+     *  reading partner. Deliberately not called after a recognizer failure (see
+     *  [onPartnerMicTapped]'s own onFailure) so a stuck mic/permission problem doesn't loop. */
+    private fun autoStartListeningIfEnabled() {
+        val bubble = _uiState.value.chatBubble ?: return
+        if (bubble.isPartnerMode && bubble.partnerTurn == PartnerTurn.AWAITING_USER && bubble.partnerMicEnabled) {
+            onPartnerMicTapped()
+        }
+    }
+
     /** Tap the mic button during the user's turn — starts SpeechRecognizer on the main thread. */
     fun onPartnerMicTapped() {
         val state = _uiState.value
@@ -665,8 +676,12 @@ class ReaderViewModel(
                         tts?.speak(j.reply, state.language.code) {
                             viewModelScope.launch(Dispatchers.Main) {
                                 setPartnerTurn(PartnerTurn.AWAITING_USER)
+                                autoStartListeningIfEnabled()
                             }
-                        } ?: setPartnerTurn(PartnerTurn.AWAITING_USER)
+                        } ?: run {
+                            setPartnerTurn(PartnerTurn.AWAITING_USER)
+                            autoStartListeningIfEnabled()
+                        }
                     }
                     PartnerJudgmentKind.QUESTION_OR_STATEMENT -> {
                         // Append Q&A to partnerMessages, speak the answer, return to AWAITING_USER
@@ -686,10 +701,13 @@ class ReaderViewModel(
                         )
                         tts?.speak(j.reply, state.language.code) {
                             viewModelScope.launch(Dispatchers.Main) {
-                                // Return to AWAITING_USER — no prompt; user will tap mic when ready
                                 setPartnerTurn(PartnerTurn.AWAITING_USER)
+                                autoStartListeningIfEnabled()
                             }
-                        } ?: setPartnerTurn(PartnerTurn.AWAITING_USER)
+                        } ?: run {
+                            setPartnerTurn(PartnerTurn.AWAITING_USER)
+                            autoStartListeningIfEnabled()
+                        }
                     }
                 }
             },
@@ -740,6 +758,7 @@ class ReaderViewModel(
                     partnerHighlightVerseId = userVerse.numericVerseId,
                     partnerHighlightIsAi = false,
                 )
+                autoStartListeningIfEnabled()
             }
         }
     }
