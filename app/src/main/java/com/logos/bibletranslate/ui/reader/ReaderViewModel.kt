@@ -621,6 +621,19 @@ class ReaderViewModel(
         }
     }
 
+    /** Called alongside [autoStartListeningIfEnabled] — the moment the user's turn begins, the
+     *  AI's next verse (once the user succeeds) is already known, so start generating its voice
+     *  audio in the background right now instead of waiting until it's actually needed. Gemini's
+     *  TTS call itself takes a few real seconds; doing it while the user is still reading their
+     *  own verse means it's often already cached by the time the AI needs to speak it. */
+    private fun prefetchNextAiVerse() {
+        val state = _uiState.value
+        val bubble = state.chatBubble ?: return
+        if (!bubble.isPartnerMode || bubble.partnerTurn != PartnerTurn.AWAITING_USER) return
+        val nextAiVerse = state.verses.getOrNull(bubble.partnerVerseIndex + 1) ?: return
+        tts?.prefetch(nextAiVerse.text, state.language.code)
+    }
+
     /** Tap the mic button during the user's turn — starts SpeechRecognizer on the main thread. */
     fun onPartnerMicTapped() {
         val state = _uiState.value
@@ -672,10 +685,12 @@ class ReaderViewModel(
                             viewModelScope.launch(Dispatchers.Main) {
                                 setPartnerTurn(PartnerTurn.AWAITING_USER)
                                 autoStartListeningIfEnabled()
+                                prefetchNextAiVerse()
                             }
                         } ?: run {
                             setPartnerTurn(PartnerTurn.AWAITING_USER)
                             autoStartListeningIfEnabled()
+                            prefetchNextAiVerse()
                         }
                     }
                     PartnerJudgmentKind.QUESTION_OR_STATEMENT -> {
@@ -698,10 +713,12 @@ class ReaderViewModel(
                             viewModelScope.launch(Dispatchers.Main) {
                                 setPartnerTurn(PartnerTurn.AWAITING_USER)
                                 autoStartListeningIfEnabled()
+                                prefetchNextAiVerse()
                             }
                         } ?: run {
                             setPartnerTurn(PartnerTurn.AWAITING_USER)
                             autoStartListeningIfEnabled()
+                            prefetchNextAiVerse()
                         }
                     }
                 }
@@ -754,6 +771,7 @@ class ReaderViewModel(
                     partnerHighlightIsAi = false,
                 )
                 autoStartListeningIfEnabled()
+                prefetchNextAiVerse()
             }
         }
     }

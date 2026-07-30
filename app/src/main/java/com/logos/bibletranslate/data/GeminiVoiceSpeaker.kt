@@ -16,6 +16,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.security.MessageDigest
 
 private const val TTS_MODEL = "gemini-3.1-flash-tts-preview"
 /** Falls back to this if the newer model rejects the request (e.g. not yet enabled on this key's project). */
@@ -23,24 +24,31 @@ private const val TTS_MODEL_FALLBACK = "gemini-2.5-flash-preview-tts"
 
 /**
  * Reads text aloud with a real Gemini AI voice (native audio generation) instead of Android's
- * built-in, robotic-sounding TextToSpeech engine — replaces the old VerseTextToSpeech everywhere
- * in the app (verse speaker icons, AI chat replies, partner-reading turns) since every one of
- * those call sites already requires the app to be online with a Gemini key configured.
+ * built-in, robotic-sounding TextToSpeech engine.
  *
- * Same fire-and-forget shape as the engine it replaces: [speak] is not suspend, starts its own
- * network + playback job, and a new call cancels whatever the previous one was doing (mirrors
- * the old engine's QUEUE_FLUSH behaviour) so overlapping taps can't talk over each other.
+ * Every unique (text, voice) pairing is generated **once ever, per device** and cached
+ * permanently in [context.cacheDir] — Bible verse text is static, so a verse read a second time
+ * (a repeat speaker-icon tap, a re-read in partner mode, a second app session) plays instantly
+ * from disk instead of re-paying Gemini's several-second generate latency. [prefetch] lets a
+ * caller warm that cache ahead of time for text it knows it'll need soon (partner reading uses
+ * this to generate the AI's next verse in the background while the user is still reading
+ * theirs, so by the time it's needed it's often already sitting on disk).
  *
- * [onError] fires (in addition to [Companion]-less [speak]'s [onDone]) whenever a request or
- * playback failure happens — a request that silently did nothing used to be indistinguishable
- * from "the AI voice sounds robotic" if a caller ended up hearing nothing at all; now the
- * caller can surface the real reason instead of guessing.
+ * [speak] is not suspend, starts its own network + playback job, and a new call cancels
+ * whatever the previous one was doing (mirrors the old Android TTS engine's QUEUE_FLUSH
+ * behaviour) so overlapping taps can't talk over each other. [onError] fires whenever a request
+ * or playback failure happens — previously these failed completely silently.
  */
 class GeminiVoiceSpeaker(private val context: Context, private val onError: (String) -> Unit = {}) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
     private var player: MediaPlayer? = null
+
+    /** Which TTS model actually worked last time — null until the first successful call. */
+    private var resolvedModel: String? = null
+
+    private val cacheDir: File by lazy { File(context.cacheDir, "gemini_tts_cache").apply { mkdirs() } }
 
     /**
      * Speaks [text] using a voice appropriate for [languageCode]. [onDone] fires once playback
@@ -53,6 +61,11 @@ class GeminiVoiceSpeaker(private val context: Context, private val onError: (Str
             onDone?.invoke()
             return
         }
+        val cacheFile = cacheFileFor(text, languageCode)
+        if (cacheFile.exists()) {
+            playFile(cacheFile, onDone)
+            return
+        }
         val apiKey = ApiKeys.geminiApiKey
         if (apiKey == null) {
             onError("No Gemini API key configured — can't generate a voice.")
@@ -60,22 +73,11 @@ class GeminiVoiceSpeaker(private val context: Context, private val onError: (Str
             return
         }
         job = scope.launch {
-            // Blindly retrying the fallback model on every single call doubled the network round
-            // trip (and so the perceived delay before any audio started) on every speak() — once
-            // we learn which model this key actually works with, stick to it. resolvedModel
-            // starts at the preferred model and only ever moves to the fallback, never back, so
-            // a transient failure of the fallback doesn't thrash between the two either.
-            val firstModel = resolvedModel ?: TTS_MODEL
-            var result = fetchAudio(apiKey, text, voiceFor(languageCode), firstModel)
-            if (result.isFailure && resolvedModel == null && firstModel == TTS_MODEL) {
-                result = fetchAudio(apiKey, text, voiceFor(languageCode), TTS_MODEL_FALLBACK)
-                if (result.isSuccess) resolvedModel = TTS_MODEL_FALLBACK
-            } else if (result.isSuccess) {
-                resolvedModel = firstModel
-            }
+            val result = fetchWithFallback(apiKey, text, languageCode)
+            result.onSuccess { pcm -> runCatching { cacheFile.writeBytes(wavHeader(pcm.size) + pcm) } }
             withContext(Dispatchers.Main) {
                 result.fold(
-                    onSuccess = { pcm -> playPcm(pcm, onDone) },
+                    onSuccess = { playFile(cacheFile, onDone) },
                     onFailure = { err ->
                         onError(err.message ?: "Voice generation failed.")
                         onDone?.invoke()
@@ -85,8 +87,26 @@ class GeminiVoiceSpeaker(private val context: Context, private val onError: (Str
         }
     }
 
-    /** Which TTS model actually worked last time — null until the first successful call. */
-    private var resolvedModel: String? = null
+    /**
+     * Opportunistically generates and caches [text]'s audio without playing it — fire-and-forget,
+     * silent on failure (a real [speak] call for the same text will surface any error itself when
+     * it's actually needed). No-ops if already cached or already in flight, and deliberately does
+     * not touch [job]/[player] so it can never interrupt whatever is currently playing.
+     */
+    fun prefetch(text: String, languageCode: String) {
+        if (text.isBlank()) return
+        val cacheFile = cacheFileFor(text, languageCode)
+        if (cacheFile.exists() || cacheFile in inFlightPrefetches) return
+        val apiKey = ApiKeys.geminiApiKey ?: return
+        inFlightPrefetches += cacheFile
+        scope.launch {
+            val result = fetchWithFallback(apiKey, text, languageCode)
+            result.onSuccess { pcm -> runCatching { cacheFile.writeBytes(wavHeader(pcm.size) + pcm) } }
+            inFlightPrefetches -= cacheFile
+        }
+    }
+
+    private val inFlightPrefetches = java.util.Collections.synchronizedSet(mutableSetOf<File>())
 
     fun stop() {
         job?.cancel()
@@ -96,6 +116,24 @@ class GeminiVoiceSpeaker(private val context: Context, private val onError: (Str
     }
 
     fun shutdown() = stop()
+
+    private suspend fun fetchWithFallback(apiKey: String, text: String, languageCode: String): Result<ByteArray> {
+        // Blindly retrying the fallback model on every single call doubled the network round
+        // trip (and so the perceived delay before any audio started) — once we learn which model
+        // this key actually works with, stick to it. resolvedModel starts at the preferred model
+        // and only ever moves to the fallback, never back, so a transient fallback failure can't
+        // thrash between the two.
+        val voice = voiceFor(languageCode)
+        val firstModel = resolvedModel ?: TTS_MODEL
+        var result = fetchAudio(apiKey, text, voice, firstModel)
+        if (result.isFailure && resolvedModel == null && firstModel == TTS_MODEL) {
+            result = fetchAudio(apiKey, text, voice, TTS_MODEL_FALLBACK)
+            if (result.isSuccess) resolvedModel = TTS_MODEL_FALLBACK
+        } else if (result.isSuccess) {
+            resolvedModel = firstModel
+        }
+        return result
+    }
 
     private suspend fun fetchAudio(apiKey: String, text: String, voiceName: String, model: String): Result<ByteArray> =
         withContext(Dispatchers.IO) {
@@ -147,31 +185,23 @@ class GeminiVoiceSpeaker(private val context: Context, private val onError: (Str
             }
         }
 
-    /** Gemini's native audio output is raw PCM16 mono @ 24kHz — wrap it in a minimal WAV header
-     *  and hand it to MediaPlayer rather than hand-rolling AudioTrack timing/threading. */
-    private fun playPcm(pcm: ByteArray, onDone: (() -> Unit)?) {
-        val wavFile = File(context.cacheDir, "gemini_tts_${System.nanoTime()}.wav")
-        try {
-            wavFile.writeBytes(wavHeader(pcm.size) + pcm)
-        } catch (e: Exception) {
-            onError("Couldn't save the voice audio: ${e.message}")
-            onDone?.invoke()
-            return
-        }
+    /** Plays an already-cached WAV file. Never deletes it — that's the whole point of the cache. */
+    private fun playFile(wavFile: File, onDone: (() -> Unit)?) {
         val mp = MediaPlayer()
         player = mp
         try {
             mp.setDataSource(wavFile.absolutePath)
             mp.setOnCompletionListener {
                 it.release()
-                wavFile.delete()
                 if (player === it) player = null
                 onDone?.invoke()
             }
             mp.setOnErrorListener { errored, what, extra ->
                 errored.release()
-                wavFile.delete()
                 if (player === errored) player = null
+                // A cached file that fails to play is corrupt/truncated — remove it so the next
+                // attempt regenerates instead of failing the same way forever.
+                runCatching { wavFile.delete() }
                 onError("Voice playback failed (code $what/$extra).")
                 onDone?.invoke()
                 true
@@ -180,11 +210,20 @@ class GeminiVoiceSpeaker(private val context: Context, private val onError: (Str
             mp.start()
         } catch (e: Exception) {
             mp.release()
-            wavFile.delete()
             player = null
             onError("Couldn't play the voice audio: ${e.message}")
             onDone?.invoke()
         }
+    }
+
+    private fun cacheFileFor(text: String, languageCode: String): File {
+        val key = sha256Hex("$text|${voiceFor(languageCode)}")
+        return File(cacheDir, "$key.wav")
+    }
+
+    private fun sha256Hex(input: String): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(input.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
     }
 
     private fun wavHeader(dataSize: Int, sampleRate: Int = 24000, channels: Int = 1, bitsPerSample: Int = 16): ByteArray {
