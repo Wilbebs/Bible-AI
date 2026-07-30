@@ -51,15 +51,16 @@ private const val LAST_OT_BOOK_ID = 39
 private const val MAX_FOLLOWUP_WORDS = 150
 
 /** How many upcoming AI turns partner reading keeps pre-generated ahead of the user's current
- *  position. 1 = only the very next AI verse; 2 = that plus the one after. Since partner mode
- *  always alternates AI/user, "the next 2 AI turns" from a user-turn index N are N+1 and N+3 — a
- *  small, bounded, incrementally-refilled lookahead rather than the whole rest of the chapter.
- *  Someone who activates partner mode is very likely to read the whole chapter, so a short lead
- *  is worth the (trivial, ~$0.0015/verse, one-time-per-device) cost; the whole chapter isn't,
- *  since most partner sessions don't run to the end and prefetching audio nobody ends up hearing
- *  is pure waste — and firing 20-30 requests at once on activation risks its own jank/rate-limit
- *  problems that a steady one-or-two-ahead trickle avoids. */
-private const val AI_PREFETCH_LOOKAHEAD_TURNS = 2
+ *  position. Since partner mode always alternates AI/user, N AI turns ahead of user-turn index I
+ *  covers verse indices I+1, I+3, ... up to I+(2N-1) — 3 turns reaches 5 verses ahead (I+1, I+3,
+ *  I+5), which is the target lead. A small, bounded, incrementally-refilled lookahead rather than
+ *  the whole rest of the chapter: someone who activates partner mode is very likely to read the
+ *  whole chapter, so a short lead is worth the (trivial, ~$0.0015/verse, one-time-per-device)
+ *  cost; the whole chapter isn't, since most partner sessions don't run to the end and
+ *  prefetching audio nobody ends up hearing is pure waste — and firing 20-30 requests at once on
+ *  activation risks its own jank/rate-limit problems (we've already seen a transient 503 from
+ *  Gemini's TTS endpoint under normal single-request load) that a steady trickle avoids. */
+private const val AI_PREFETCH_LOOKAHEAD_TURNS = 3
 
 /** Single-word focus card: pronunciation + dictionary definition + an optional cross-language translation. */
 data class WordInfoState(
@@ -608,6 +609,15 @@ class ReaderViewModel(
             ),
         )
         speakAiPartnerVerse(anchorIdx)
+        // The anchor verse (anchorIdx) is spoken live above and doesn't need prefetching, but
+        // the AI turns after it (anchorIdx+2, +4, ...) are already known right now — start
+        // warming those in the background immediately rather than waiting for the first
+        // AWAITING_USER transition, so the lookahead buffer is already partly filled before the
+        // user's very first turn even begins.
+        for (turnsAhead in 1 until AI_PREFETCH_LOOKAHEAD_TURNS) {
+            val aiVerse = verses.getOrNull(anchorIdx + turnsAhead * 2) ?: break
+            tts?.prefetch(aiVerse.text, state.language.code)
+        }
     }
 
     /** Exit partner reading mode, clear all partner highlights. */

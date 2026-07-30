@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -138,7 +139,29 @@ class GeminiVoiceSpeaker(private val context: Context, private val onError: (Str
         return result
     }
 
-    private suspend fun fetchAudio(apiKey: String, text: String, voiceName: String, model: String): Result<ByteArray> =
+    /** HTTP codes worth a short retry — transient capacity/rate issues, not real request errors. */
+    private fun isTransient(code: Int) = code == 503 || code == 429 || code == 500
+
+    private suspend fun fetchAudio(apiKey: String, text: String, voiceName: String, model: String): Result<ByteArray> {
+        for (attempt in 0..2) {
+            if (attempt > 0) delay(500L * attempt) // 500ms, then 1000ms
+            val result = fetchAudioOnce(apiKey, text, voiceName, model)
+            if (result.isSuccess) return result
+            val code = (result.exceptionOrNull() as? TransientHttpException)?.code
+            if (code == null || !isTransient(code)) return result // don't retry real errors
+            if (attempt == 2) {
+                // Every attempt hit a transient error — surface a plain, non-technical message
+                // rather than the raw JSON error body a user saw once here (a scary wall of text
+                // for something that's just "Google's TTS servers are momentarily overloaded").
+                return Result.failure(Exception("Gemini's voice service is busy right now — try again in a moment."))
+            }
+        }
+        error("unreachable")
+    }
+
+    private class TransientHttpException(val code: Int, message: String) : Exception(message)
+
+    private suspend fun fetchAudioOnce(apiKey: String, text: String, voiceName: String, model: String): Result<ByteArray> =
         withContext(Dispatchers.IO) {
             try {
                 val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey")
@@ -168,9 +191,13 @@ class GeminiVoiceSpeaker(private val context: Context, private val onError: (Str
                 connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
 
                 if (connection.responseCode !in 200..299) {
+                    val code = connection.responseCode
+                    if (isTransient(code)) {
+                        return@withContext Result.failure(TransientHttpException(code, "HTTP $code"))
+                    }
                     val errorBody = runCatching { connection.errorStream?.bufferedReader()?.use { it.readText() } }.getOrNull()
                     return@withContext Result.failure(
-                        Exception("Gemini voice request failed: HTTP ${connection.responseCode}${errorBody?.let { " — ${it.take(200)}" } ?: ""}"),
+                        Exception("Gemini voice request failed: HTTP $code${errorBody?.let { " — ${it.take(200)}" } ?: ""}"),
                     )
                 }
                 val responseText = connection.inputStream.bufferedReader().use { it.readText() }
