@@ -50,17 +50,17 @@ private const val LAST_OT_BOOK_ID = 39
 /** ~200 tokens per the addendum's follow-up input cap, approximated as a word count. */
 private const val MAX_FOLLOWUP_WORDS = 150
 
-/** How many upcoming AI turns partner reading keeps pre-generated ahead of the user's current
- *  position. Since partner mode always alternates AI/user, N AI turns ahead of user-turn index I
- *  covers verse indices I+1, I+3, ... up to I+(2N-1) — 3 turns reaches 5 verses ahead (I+1, I+3,
- *  I+5), which is the target lead. A small, bounded, incrementally-refilled lookahead rather than
- *  the whole rest of the chapter: someone who activates partner mode is very likely to read the
- *  whole chapter, so a short lead is worth the (trivial, ~$0.0015/verse, one-time-per-device)
- *  cost; the whole chapter isn't, since most partner sessions don't run to the end and
- *  prefetching audio nobody ends up hearing is pure waste — and firing 20-30 requests at once on
- *  activation risks its own jank/rate-limit problems (we've already seen a transient 503 from
- *  Gemini's TTS endpoint under normal single-request load) that a steady trickle avoids. */
-private const val AI_PREFETCH_LOOKAHEAD_TURNS = 3
+/** How many raw verses ahead of whichever verse is *currently* being read (by either party)
+ *  partner reading keeps pre-generated — re-measured from the current verse every time a new
+ *  one starts, not a fixed number of AI turns from wherever the user's last turn began. Only the
+ *  AI-spoken verses within that window actually need generating (the user reads their own verses
+ *  aloud themselves — prefetching audio that's never played would be pure waste), which within
+ *  any 5-verse window is 2-3 verses given the strict AI/user alternation. A short lead is worth
+ *  the (trivial, ~$0.0015/verse, one-time-per-device) cost; the whole chapter isn't, since most
+ *  partner sessions don't run to the end — and firing 20-30 requests at once on activation risks
+ *  its own jank/rate-limit problems (we've already seen a transient 503 from Gemini's TTS
+ *  endpoint under normal single-request load) that a steady trickle avoids. */
+private const val PARTNER_PREFETCH_LEAD_VERSES = 5
 
 /** Single-word focus card: pronunciation + dictionary definition + an optional cross-language translation. */
 data class WordInfoState(
@@ -609,15 +609,6 @@ class ReaderViewModel(
             ),
         )
         speakAiPartnerVerse(anchorIdx)
-        // The anchor verse (anchorIdx) is spoken live above and doesn't need prefetching, but
-        // the AI turns after it (anchorIdx+2, +4, ...) are already known right now — start
-        // warming those in the background immediately rather than waiting for the first
-        // AWAITING_USER transition, so the lookahead buffer is already partly filled before the
-        // user's very first turn even begins.
-        for (turnsAhead in 1 until AI_PREFETCH_LOOKAHEAD_TURNS) {
-            val aiVerse = verses.getOrNull(anchorIdx + turnsAhead * 2) ?: break
-            tts?.prefetch(aiVerse.text, state.language.code)
-        }
     }
 
     /** Exit partner reading mode, clear all partner highlights. */
@@ -642,20 +633,31 @@ class ReaderViewModel(
         }
     }
 
-    /** Called alongside [autoStartListeningIfEnabled] — the moment the user's turn begins, the
-     *  next couple of AI verses (once the user succeeds) are already known, so start generating
-     *  their voice audio in the background right now instead of waiting until each is actually
-     *  needed. Gemini's TTS call itself takes a few real seconds; doing it while the user is
-     *  still reading means the audio is often already cached by the time the AI needs to speak
-     *  it. [GeminiVoiceSpeaker.prefetch] already no-ops anything already cached or in flight, so
-     *  calling this on every turn re-requests nothing that's already been asked for. */
-    private fun prefetchNextAiVerse() {
+    /** Called every time a new verse starts being read — by either the AI or the user — so the
+     *  prefetch window is always measured from wherever reading actually is right now, not from
+     *  wherever the user's last turn happened to begin. Ensures every AI-spoken verse within
+     *  [PARTNER_PREFETCH_LEAD_VERSES] of the current verse is generating or already cached; the
+     *  in-between (user-spoken) verses in that range are skipped since their audio is never
+     *  played — the user reads those aloud themselves. Called this often, a verse that entered
+     *  the window several verses back has had several verse-durations of wall-clock time to
+     *  finish, while one that just entered the window is still in flight — exactly the rolling
+     *  pipeline effect wanted. [GeminiVoiceSpeaker.prefetch] already no-ops anything already
+     *  cached or in flight, so calling this on every single verse start re-requests nothing. */
+    private fun refreshPartnerPrefetchWindow() {
         val state = _uiState.value
         val bubble = state.chatBubble ?: return
-        if (!bubble.isPartnerMode || bubble.partnerTurn != PartnerTurn.AWAITING_USER) return
-        for (turnsAhead in 0 until AI_PREFETCH_LOOKAHEAD_TURNS) {
-            val aiVerse = state.verses.getOrNull(bubble.partnerVerseIndex + 1 + turnsAhead * 2) ?: break
+        if (!bubble.isPartnerMode) return
+        val currentIdx = bubble.partnerVerseIndex
+        // Which side of the alternation the *current* verse is on determines the parity of the
+        // AI-spoken verses ahead of it: if the AI is reading right now, the next AI verse is two
+        // ahead (the very next one is the user's); if the user is reading/about to read, the
+        // next AI verse is the very next index.
+        val firstAiOffset = if (bubble.partnerHighlightIsAi == true) 2 else 1
+        var offset = firstAiOffset
+        while (offset <= PARTNER_PREFETCH_LEAD_VERSES) {
+            val aiVerse = state.verses.getOrNull(currentIdx + offset) ?: break
             tts?.prefetch(aiVerse.text, state.language.code)
+            offset += 2
         }
     }
 
@@ -727,12 +729,12 @@ class ReaderViewModel(
                             viewModelScope.launch(Dispatchers.Main) {
                                 setPartnerTurn(PartnerTurn.AWAITING_USER)
                                 autoStartListeningIfEnabled()
-                                prefetchNextAiVerse()
+                                refreshPartnerPrefetchWindow()
                             }
                         } ?: run {
                             setPartnerTurn(PartnerTurn.AWAITING_USER)
                             autoStartListeningIfEnabled()
-                            prefetchNextAiVerse()
+                            refreshPartnerPrefetchWindow()
                         }
                     }
                 }
@@ -768,6 +770,7 @@ class ReaderViewModel(
             partnerHighlightVerseId = aiVerse.numericVerseId,
             partnerHighlightIsAi = true,
         )
+        refreshPartnerPrefetchWindow()
         tts?.speak(aiVerse.text, state.language.code) {
             viewModelScope.launch(Dispatchers.Main) {
                 val userIdx = aiIdx + 1
@@ -785,7 +788,7 @@ class ReaderViewModel(
                     partnerHighlightIsAi = false,
                 )
                 autoStartListeningIfEnabled()
-                prefetchNextAiVerse()
+                refreshPartnerPrefetchWindow()
             }
         }
     }
