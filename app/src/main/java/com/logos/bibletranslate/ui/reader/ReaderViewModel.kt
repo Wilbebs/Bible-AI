@@ -659,17 +659,12 @@ class ReaderViewModel(
             onSuccess = { j ->
                 when (j.kind) {
                     PartnerJudgmentKind.GOOD_READ -> {
-                        // Brief affirmation (≤8 words), then immediately advance to next AI verse
-                        val nextAiIdx = userVerseIndex + 1
-                        if (j.reply.isNotBlank()) {
-                            tts?.speak(j.reply, state.language.code) {
-                                viewModelScope.launch(Dispatchers.Main) {
-                                    advanceToAiVerse(nextAiIdx)
-                                }
-                            }
-                        } else {
-                            advanceToAiVerse(nextAiIdx)
-                        }
+                        // Straight on to the next AI verse — deliberately no spoken affirmation
+                        // here. It used to speak a "great job, next verse" line before advancing,
+                        // which both added an extra network+TTS round trip (real latency) and
+                        // read as the AI asking permission to continue every single verse. A
+                        // real reading partner alternating verse-by-verse just keeps going.
+                        advanceToAiVerse(userVerseIndex + 1)
                     }
                     PartnerJudgmentKind.BAD_READ -> {
                         // Gentle note, then return to AWAITING_USER for a retry on the same verse

@@ -60,11 +60,18 @@ class GeminiVoiceSpeaker(private val context: Context, private val onError: (Str
             return
         }
         job = scope.launch {
-            var result = fetchAudio(apiKey, text, voiceFor(languageCode), TTS_MODEL)
-            if (result.isFailure) {
-                // Retry once against the older, more broadly-enabled model before giving up —
-                // some API keys/projects haven't been granted the newest preview model yet.
+            // Blindly retrying the fallback model on every single call doubled the network round
+            // trip (and so the perceived delay before any audio started) on every speak() — once
+            // we learn which model this key actually works with, stick to it. resolvedModel
+            // starts at the preferred model and only ever moves to the fallback, never back, so
+            // a transient failure of the fallback doesn't thrash between the two either.
+            val firstModel = resolvedModel ?: TTS_MODEL
+            var result = fetchAudio(apiKey, text, voiceFor(languageCode), firstModel)
+            if (result.isFailure && resolvedModel == null && firstModel == TTS_MODEL) {
                 result = fetchAudio(apiKey, text, voiceFor(languageCode), TTS_MODEL_FALLBACK)
+                if (result.isSuccess) resolvedModel = TTS_MODEL_FALLBACK
+            } else if (result.isSuccess) {
+                resolvedModel = firstModel
             }
             withContext(Dispatchers.Main) {
                 result.fold(
@@ -77,6 +84,9 @@ class GeminiVoiceSpeaker(private val context: Context, private val onError: (Str
             }
         }
     }
+
+    /** Which TTS model actually worked last time — null until the first successful call. */
+    private var resolvedModel: String? = null
 
     fun stop() {
         job?.cancel()
