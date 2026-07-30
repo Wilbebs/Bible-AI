@@ -50,6 +50,17 @@ private const val LAST_OT_BOOK_ID = 39
 /** ~200 tokens per the addendum's follow-up input cap, approximated as a word count. */
 private const val MAX_FOLLOWUP_WORDS = 150
 
+/** How many upcoming AI turns partner reading keeps pre-generated ahead of the user's current
+ *  position. 1 = only the very next AI verse; 2 = that plus the one after. Since partner mode
+ *  always alternates AI/user, "the next 2 AI turns" from a user-turn index N are N+1 and N+3 — a
+ *  small, bounded, incrementally-refilled lookahead rather than the whole rest of the chapter.
+ *  Someone who activates partner mode is very likely to read the whole chapter, so a short lead
+ *  is worth the (trivial, ~$0.0015/verse, one-time-per-device) cost; the whole chapter isn't,
+ *  since most partner sessions don't run to the end and prefetching audio nobody ends up hearing
+ *  is pure waste — and firing 20-30 requests at once on activation risks its own jank/rate-limit
+ *  problems that a steady one-or-two-ahead trickle avoids. */
+private const val AI_PREFETCH_LOOKAHEAD_TURNS = 2
+
 /** Single-word focus card: pronunciation + dictionary definition + an optional cross-language translation. */
 data class WordInfoState(
     val word: String,
@@ -622,16 +633,20 @@ class ReaderViewModel(
     }
 
     /** Called alongside [autoStartListeningIfEnabled] — the moment the user's turn begins, the
-     *  AI's next verse (once the user succeeds) is already known, so start generating its voice
-     *  audio in the background right now instead of waiting until it's actually needed. Gemini's
-     *  TTS call itself takes a few real seconds; doing it while the user is still reading their
-     *  own verse means it's often already cached by the time the AI needs to speak it. */
+     *  next couple of AI verses (once the user succeeds) are already known, so start generating
+     *  their voice audio in the background right now instead of waiting until each is actually
+     *  needed. Gemini's TTS call itself takes a few real seconds; doing it while the user is
+     *  still reading means the audio is often already cached by the time the AI needs to speak
+     *  it. [GeminiVoiceSpeaker.prefetch] already no-ops anything already cached or in flight, so
+     *  calling this on every turn re-requests nothing that's already been asked for. */
     private fun prefetchNextAiVerse() {
         val state = _uiState.value
         val bubble = state.chatBubble ?: return
         if (!bubble.isPartnerMode || bubble.partnerTurn != PartnerTurn.AWAITING_USER) return
-        val nextAiVerse = state.verses.getOrNull(bubble.partnerVerseIndex + 1) ?: return
-        tts?.prefetch(nextAiVerse.text, state.language.code)
+        for (turnsAhead in 0 until AI_PREFETCH_LOOKAHEAD_TURNS) {
+            val aiVerse = state.verses.getOrNull(bubble.partnerVerseIndex + 1 + turnsAhead * 2) ?: break
+            tts?.prefetch(aiVerse.text, state.language.code)
+        }
     }
 
     /** Tap the mic button during the user's turn — starts SpeechRecognizer on the main thread. */

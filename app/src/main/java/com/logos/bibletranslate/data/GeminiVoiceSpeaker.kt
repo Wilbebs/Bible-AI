@@ -48,7 +48,10 @@ class GeminiVoiceSpeaker(private val context: Context, private val onError: (Str
     /** Which TTS model actually worked last time — null until the first successful call. */
     private var resolvedModel: String? = null
 
-    private val cacheDir: File by lazy { File(context.cacheDir, "gemini_tts_cache").apply { mkdirs() } }
+    // filesDir, not cacheDir: Android is free to purge cacheDir under storage pressure at any
+    // time with no warning, which would silently defeat the point of a "never regenerate this
+    // verse again" cache. filesDir only goes away on uninstall/clear-data.
+    private val cacheDir: File by lazy { File(context.filesDir, "gemini_tts_cache").apply { mkdirs() } }
 
     /**
      * Speaks [text] using a voice appropriate for [languageCode]. [onDone] fires once playback
