@@ -175,32 +175,46 @@ class VerseChatClient {
         spokenText: String,
     ): Result<PartnerReadingJudgment> {
         val system = """
-            You are a gentle Bible reading companion running a Partner Reading exercise.
-            The user was asked to read this verse aloud in $sourceLangName:
+            You are a Bible reading companion running a Partner Reading exercise. The user was
+            asked to read this verse aloud in $sourceLangName:
             "$expectedVerseText"
-            
+
             Their speech was transcribed as:
             "$spokenText"
-            
-            Classify this into exactly one of:
-            - GOOD_READ  : They read the verse correctly, or close enough (minor word slips are fine)
-            - BAD_READ   : Most of the verse is missing, badly garbled, or the transcript is clearly wrong
-            - QUESTION_OR_STATEMENT : They said something unrelated to reading the verse (a question, a comment, etc.)
-            
-            Set "kind" to one of those three exact strings.
-            Set "reply" to a response in $sourceLangName:
-            - GOOD_READ           → 1 very short warm affirmation (max 8 words — they want to keep reading)
-            - BAD_READ            → 1-2 gentle, encouraging sentences
-            - QUESTION_OR_STATEMENT → a concise, helpful answer staying focused on the Bible passage
+
+            This is a practice/flow exercise, not a grading exercise — the goal is to keep the
+            reading moving, not to correct pronunciation or word-perfect accuracy. Speech-to-text
+            transcripts of a second language are frequently garbled, code-switched, or only
+            partially recognized even when the person read it just fine out loud, so default to
+            treating this as a genuine (if imperfect) reading attempt unless it is UNMISTAKABLY
+            a question or comment instead of a reading attempt (e.g. "what does this mean",
+            "wait, can you explain that", "I have a question").
+
+            Classify into exactly one of:
+            - READ_ATTEMPT : Any attempt to read the verse — including mispronunciations, missed
+              words, accent-driven transcription errors, or a transcript that only loosely
+              resembles the verse. This is the default; use it unless the case below clearly applies.
+            - QUESTION_OR_STATEMENT : They unmistakably asked a question or made a comment instead
+              of attempting to read.
+
+            Set "kind" to one of those two exact strings.
+            Set "reply":
+            - READ_ATTEMPT → always the empty string "" (nothing is spoken; the app just moves on)
+            - QUESTION_OR_STATEMENT → a concise, helpful answer in $sourceLangName, staying focused on the Bible passage
         """.trimIndent()
         return callGemini(apiKey, system, emptyList(), spokenText, PARTNER_JUDGMENT_SCHEMA)
             .mapCatching { json ->
                 val obj = JSONObject(json)
-                val kindStr = obj.optString("kind", "GOOD_READ")
+                val kindStr = obj.optString("kind", "READ_ATTEMPT")
                 val reply = obj.optString("reply", "")
+                // READ_ATTEMPT is the new, deliberately-permissive default (see the prompt above)
+                // — everything except an unmistakable question maps to GOOD_READ so the ViewModel
+                // just keeps moving. BAD_READ is still accepted from the model as a synonym in
+                // case older prompt phrasing lingers in a cached response, but nothing here asks
+                // for it anymore.
                 val kind = when (kindStr) {
-                    "BAD_READ" -> PartnerJudgmentKind.BAD_READ
                     "QUESTION_OR_STATEMENT" -> PartnerJudgmentKind.QUESTION_OR_STATEMENT
+                    "BAD_READ" -> PartnerJudgmentKind.BAD_READ
                     else -> PartnerJudgmentKind.GOOD_READ
                 }
                 PartnerReadingJudgment(kind, reply)

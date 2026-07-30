@@ -686,27 +686,16 @@ class ReaderViewModel(
         judgment.fold(
             onSuccess = { j ->
                 when (j.kind) {
-                    PartnerJudgmentKind.GOOD_READ -> {
-                        // Straight on to the next AI verse — deliberately no spoken affirmation
-                        // here. It used to speak a "great job, next verse" line before advancing,
-                        // which both added an extra network+TTS round trip (real latency) and
-                        // read as the AI asking permission to continue every single verse. A
-                        // real reading partner alternating verse-by-verse just keeps going.
+                    PartnerJudgmentKind.GOOD_READ, PartnerJudgmentKind.BAD_READ -> {
+                        // Straight on to the next AI verse, no matter how rough the read was, and
+                        // deliberately no spoken commentary or retry pause — this is a flow/
+                        // practice exercise, not a grading one. Judging accuracy and pausing to
+                        // ask for a retry made second-language attempts (which STT often garbles
+                        // even when spoken fine) feel like the app was constantly interrupting
+                        // instead of just reading along. The prompt in VerseChatClient already
+                        // defaults almost everything here to GOOD_READ; BAD_READ is kept as a
+                        // no-op synonym rather than removed, in case the model ever still returns it.
                         advanceToAiVerse(userVerseIndex + 1)
-                    }
-                    PartnerJudgmentKind.BAD_READ -> {
-                        // Gentle note, then return to AWAITING_USER for a retry on the same verse
-                        tts?.speak(j.reply, state.language.code) {
-                            viewModelScope.launch(Dispatchers.Main) {
-                                setPartnerTurn(PartnerTurn.AWAITING_USER)
-                                autoStartListeningIfEnabled()
-                                prefetchNextAiVerse()
-                            }
-                        } ?: run {
-                            setPartnerTurn(PartnerTurn.AWAITING_USER)
-                            autoStartListeningIfEnabled()
-                            prefetchNextAiVerse()
-                        }
                     }
                     PartnerJudgmentKind.QUESTION_OR_STATEMENT -> {
                         // Append Q&A to partnerMessages, speak the answer, return to AWAITING_USER
