@@ -8,9 +8,11 @@ import com.logos.bibletranslate.data.CloudVoiceSpeaker
 import com.logos.bibletranslate.data.GeminiVoiceSpeaker
 import com.logos.bibletranslate.data.BibleLanguage
 import com.logos.bibletranslate.data.PartnerJudgmentKind
+import com.logos.bibletranslate.data.PartnerReadingMode
 import com.logos.bibletranslate.data.PartnerSpeechRecognizer
 import com.logos.bibletranslate.data.PartnerTurn
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import com.logos.bibletranslate.data.BibleRepository
 import com.logos.bibletranslate.data.BookInfo
 import com.logos.bibletranslate.data.ChatMessage
@@ -62,6 +64,15 @@ private const val MAX_FOLLOWUP_WORDS = 150
  *  its own jank/rate-limit problems (we've already seen a transient 503 from Gemini's TTS
  *  endpoint under normal single-request load) that a steady trickle avoids. */
 private const val PARTNER_PREFETCH_LEAD_VERSES = 5
+
+/** How many verses of already-read text to give judgePartnerReading for recall context (e.g.
+ *  "what did that earlier verse mean?"). Bounded so the call stays fast. */
+private const val PARTNER_RECENT_CONTEXT_VERSES = 5
+
+/** How many consecutive "incomplete read" judgments a single verse tolerates before advancing
+ *  anyway — guards against a transcript that can never be judged complete (a device/locale
+ *  recognition quirk) stalling the whole session forever. */
+private const val MAX_INCOMPLETE_READ_RETRIES = 3
 
 /** Single-word focus card: pronunciation + dictionary definition + an optional cross-language translation. */
 data class WordInfoState(
@@ -159,6 +170,21 @@ data class ChatBubbleState(
     val partnerMicEnabled: Boolean = true,
     /** True while the chat-input mic is actively capturing speech. */
     val chatMicListening: Boolean = false,
+    /** Which of the three partner-reading modes is active — replaces the old language dropdown
+     *  in partner mode, which never made sense there (partner mode always reads whatever
+     *  translation is currently loaded, not a separately chosen language). */
+    val partnerMode: PartnerReadingMode = PartnerReadingMode.PARTNER_READ,
+    /**
+     * Speech captured so far for the *current* verse across one or more listenOnce() calls —
+     * non-empty only when a prior attempt was judged an incomplete read (cut off mid-verse) and
+     * we're silently re-listening for the rest rather than advancing. Cleared whenever the
+     * current verse actually advances or a question is asked.
+     */
+    val partnerAccumulatedTranscript: String = "",
+    /** How many consecutive "incomplete read" judgments this verse has gotten — capped so a
+     *  transcript that can never be judged complete (e.g. via a device/locale recognition quirk)
+     *  can't stall the session forever. */
+    val partnerIncompleteRetryCount: Int = 0,
 )
 
 data class VerseTranslationEntry(val language: BibleLanguage, val text: String?)
@@ -257,6 +283,11 @@ class ReaderViewModel(
     private var geminiTts: GeminiVoiceSpeaker? = null
     /** Speech recogniser for partner reading — created once alongside TTS. */
     private var recognizer: PartnerSpeechRecognizer? = null
+    /** The in-flight listenOnce() coroutine, if any — cancelling it (e.g. the user toggles the
+     *  mic off mid-listen) triggers PartnerSpeechRecognizer's own cancellation cleanup (stops and
+     *  destroys the active recognizer session) via structured concurrency, with no separate
+     *  cancel API needed on the recognizer itself. */
+    private var partnerListenJob: Job? = null
     /** Application context stored during initTts — needed for speech recognition. */
     private var appContext: Context? = null
     /** Fetches downloadable-only translation DBs on demand — created lazily alongside [appContext]. */
@@ -571,9 +602,20 @@ class ReaderViewModel(
     /** Toggle the partner mic on/off without changing the turn state. */
     fun onPartnerMicToggle() {
         val bubble = _uiState.value.chatBubble ?: return
+        val turningOff = bubble.partnerMicEnabled
+        val wasListening = bubble.partnerTurn == PartnerTurn.LISTENING
         _uiState.value = _uiState.value.copy(
             chatBubble = bubble.copy(partnerMicEnabled = !bubble.partnerMicEnabled),
         )
+        if (turningOff && wasListening) {
+            // Mic off must actually stop sound from coming in, not just prevent the *next*
+            // listen — cancelling the in-flight listenOnce() job triggers PartnerSpeechRecognizer's
+            // own cleanup (stopListening + destroy) via its invokeOnCancellation handler. That
+            // cancellation short-circuits the rest of onPartnerMicTapped's coroutine (including
+            // its own turn-reset), so it's done explicitly here instead.
+            partnerListenJob?.cancel()
+            setPartnerTurn(PartnerTurn.AWAITING_USER)
+        }
     }
 
     /**
@@ -611,8 +653,8 @@ class ReaderViewModel(
     /** Enter partner reading mode.
      *
      * Starts at whichever verse the user last tapped the verse-number of (hoveredVerseId),
-     * falling back to the verse the bubble is anchored to. No odd/even snapping — the AI
-     * reads the anchor verse first, then alternates from there. */
+     * falling back to the verse the bubble is anchored to. What happens next depends on
+     * [ChatBubbleState.partnerMode] — see [startPartnerModeAt]. */
     fun onEnterPartnerMode() {
         val ctx = appContext
         if (ctx != null && !NetworkUtils.isOnline(ctx)) {
@@ -631,20 +673,52 @@ class ReaderViewModel(
             chatBubble = bubble.copy(
                 isPartnerMode = true,
                 partnerMessages = emptyList(),
+                partnerAccumulatedTranscript = "",
+                partnerIncompleteRetryCount = 0,
             ),
         )
-        speakAiPartnerVerse(anchorIdx)
+        startPartnerModeAt(anchorIdx)
     }
 
     /** Exit partner reading mode, clear all partner highlights. */
     fun onExitPartnerMode() {
         geminiTts?.stop()
+        partnerListenJob?.cancel()
         val bubble = _uiState.value.chatBubble ?: return
         _uiState.value = _uiState.value.copy(
             chatBubble = bubble.copy(isPartnerMode = false),
             partnerHighlightVerseId = null,
             partnerHighlightIsAi = null,
         )
+    }
+
+    /** Switches which partner-reading mode is active, restarting the flow at whatever verse is
+     *  currently showing under the new mode's rules. Stops any in-flight speaking/listening from
+     *  the old mode first — switching mid-verse deliberately re-starts at the current verse
+     *  rather than trying to carry over turn state that may not even exist in the new mode
+     *  (e.g. Solo Read has no AI-speaking phase at all). */
+    fun onPartnerModeChanged(mode: PartnerReadingMode) {
+        val bubble = _uiState.value.chatBubble ?: return
+        if (bubble.partnerMode == mode) return
+        geminiTts?.stop()
+        partnerListenJob?.cancel()
+        val currentIdx = bubble.partnerVerseIndex
+        _uiState.value = _uiState.value.copy(
+            chatBubble = bubble.copy(
+                partnerMode = mode,
+                partnerAccumulatedTranscript = "",
+                partnerIncompleteRetryCount = 0,
+            ),
+        )
+        if (bubble.isPartnerMode) startPartnerModeAt(currentIdx)
+    }
+
+    private fun startPartnerModeAt(idx: Int) {
+        when (_uiState.value.chatBubble?.partnerMode) {
+            PartnerReadingMode.READ_ALOUD -> speakReadAloudVerse(idx)
+            PartnerReadingMode.SOLO_READ -> advanceSoloRead(idx)
+            else -> speakAiPartnerVerse(idx) // PARTNER_READ (default) and null (shouldn't happen)
+        }
     }
 
     /** Called right after the turn flips to AWAITING_USER — starts listening immediately so the
@@ -658,7 +732,7 @@ class ReaderViewModel(
         }
     }
 
-    /** Called every time a new verse starts being read — by either the AI or the user — so the
+    /** Called every time a new verse starts being read by the AI — by either party — so the
      *  prefetch window is always measured from wherever reading actually is right now, not from
      *  wherever the user's last turn happened to begin. Ensures every AI-spoken verse within
      *  [PARTNER_PREFETCH_LEAD_VERSES] of the current verse is generating or already cached; the
@@ -667,11 +741,15 @@ class ReaderViewModel(
      *  the window several verses back has had several verse-durations of wall-clock time to
      *  finish, while one that just entered the window is still in flight — exactly the rolling
      *  pipeline effect wanted. [CloudVoiceSpeaker.prefetch] already no-ops anything already
-     *  cached or in flight, so calling this on every single verse start re-requests nothing. */
+     *  cached or in flight, so calling this on every single verse start re-requests nothing.
+     *
+     *  Only meaningful for PARTNER_READ's strict AI/user alternation — Solo Read never has the AI
+     *  speak a verse at all, and Read Aloud's every-verse-is-AI sequence uses its own simple
+     *  one-ahead prefetch in [speakReadAloudVerse] instead. */
     private fun refreshPartnerPrefetchWindow() {
         val state = _uiState.value
         val bubble = state.chatBubble ?: return
-        if (!bubble.isPartnerMode) return
+        if (!bubble.isPartnerMode || bubble.partnerMode != PartnerReadingMode.PARTNER_READ) return
         val currentIdx = bubble.partnerVerseIndex
         // Which side of the alternation the *current* verse is on determines the parity of the
         // AI-spoken verses ahead of it: if the AI is reading right now, the next AI verse is two
@@ -686,13 +764,22 @@ class ReaderViewModel(
         }
     }
 
+    /** A short block of recently-read verse text, for judgePartnerReading's recall context (e.g.
+     *  "what did the verse before that mean?") — not graded against, purely for reference. */
+    private fun recentVersesContextText(state: ReaderUiState, currentIdx: Int): String {
+        val start = (currentIdx - PARTNER_RECENT_CONTEXT_VERSES).coerceAtLeast(0)
+        val end = (currentIdx + 1).coerceAtMost(state.verses.size)
+        if (start >= end) return ""
+        return state.verses.subList(start, end).joinToString("\n") { "${it.chapter}:${it.verse} ${it.text}" }
+    }
+
     /** Tap the mic button during the user's turn — starts SpeechRecognizer on the main thread. */
     fun onPartnerMicTapped() {
         val state = _uiState.value
         val bubble = state.chatBubble ?: return
         if (bubble.partnerTurn != PartnerTurn.AWAITING_USER) return
         if (!bubble.partnerMicEnabled) return
-        viewModelScope.launch(Dispatchers.Main) {
+        partnerListenJob = viewModelScope.launch(Dispatchers.Main) {
             setPartnerTurn(PartnerTurn.LISTENING)
             val ctx = appContext ?: return@launch
             val langTag = localeTagFor(state.language.code)
@@ -714,27 +801,55 @@ class ReaderViewModel(
         val userVerseIndex = bubble.partnerVerseIndex
         val expectedText = verses.getOrNull(userVerseIndex)?.text ?: return
         val langName = state.language.displayName
+        // Stitch onto whatever was captured on a prior incomplete pass at this same verse (item
+        // 4: the recognizer's silence-endpoint can still end an utterance before the whole verse
+        // is out, even with the extended timeout) so the judgment call sees everything said so
+        // far, not just this one fragment.
+        val combined = listOf(bubble.partnerAccumulatedTranscript, transcript)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
 
         setPartnerTurn(PartnerTurn.AI_RESPONDING)
 
         val apiKey = ApiKeys.geminiApiKey ?: return
-        val judgment = verseChatClient.judgePartnerReading(apiKey, expectedText, langName, transcript)
+        val recentContext = recentVersesContextText(state, userVerseIndex)
+        val judgment = verseChatClient.judgePartnerReading(
+            apiKey, expectedText, langName, combined, recentContext, bubble.partnerMessages,
+        )
 
         judgment.fold(
             onSuccess = { j ->
                 when (j.kind) {
                     PartnerJudgmentKind.GOOD_READ, PartnerJudgmentKind.BAD_READ -> {
-                        // Straight on to the next AI verse, no matter how rough the read was, and
-                        // deliberately no spoken commentary or retry pause — this is a flow/
-                        // practice exercise, not a grading one. Judging accuracy and pausing to
-                        // ask for a retry made second-language attempts (which STT often garbles
-                        // even when spoken fine) feel like the app was constantly interrupting
-                        // instead of just reading along. The prompt in VerseChatClient already
-                        // defaults almost everything here to GOOD_READ; BAD_READ is kept as a
-                        // no-op synonym rather than removed, in case the model ever still returns it.
-                        advanceToAiVerse(userVerseIndex + 1)
+                        if (j.isComplete) {
+                            clearPartnerAccumulation()
+                            advanceAfterCompleteRead(userVerseIndex)
+                        } else {
+                            val retries = bubble.partnerIncompleteRetryCount
+                            if (retries >= MAX_INCOMPLETE_READ_RETRIES) {
+                                // Never judged complete after several tries — move on rather than
+                                // stall the session forever over what's likely a recognition quirk.
+                                clearPartnerAccumulation()
+                                advanceAfterCompleteRead(userVerseIndex)
+                            } else {
+                                // Deliberately silent — no spoken commentary, just keep listening
+                                // for the rest of the verse. Matches the "just continue" philosophy
+                                // already established for reading quality; this is the same idea
+                                // applied to coverage instead.
+                                val cur = _uiState.value.chatBubble ?: return
+                                _uiState.value = _uiState.value.copy(
+                                    chatBubble = cur.copy(
+                                        partnerAccumulatedTranscript = combined,
+                                        partnerIncompleteRetryCount = retries + 1,
+                                    ),
+                                )
+                                setPartnerTurn(PartnerTurn.AWAITING_USER)
+                                autoStartListeningIfEnabled()
+                            }
+                        }
                     }
                     PartnerJudgmentKind.QUESTION_OR_STATEMENT -> {
+                        clearPartnerAccumulation()
                         // Append Q&A to partnerMessages, speak the answer, return to AWAITING_USER
                         val cur = _uiState.value.chatBubble ?: return
                         val updatedMsgs = cur.partnerMessages +
@@ -766,9 +881,32 @@ class ReaderViewModel(
             },
             onFailure = { err ->
                 showToast(err.message ?: "Couldn't judge that reading — try again.")
+                // Keep whatever was captured — a transient judgment failure shouldn't discard
+                // reading progress the user already made.
+                val cur = _uiState.value.chatBubble
+                if (cur != null) _uiState.value = _uiState.value.copy(chatBubble = cur.copy(partnerAccumulatedTranscript = combined))
                 setPartnerTurn(PartnerTurn.AWAITING_USER)
+                autoStartListeningIfEnabled()
             },
         )
+    }
+
+    private fun clearPartnerAccumulation() {
+        val cur = _uiState.value.chatBubble ?: return
+        _uiState.value = _uiState.value.copy(
+            chatBubble = cur.copy(partnerAccumulatedTranscript = "", partnerIncompleteRetryCount = 0),
+        )
+    }
+
+    /** A read was judged complete — advance however the current mode advances. PARTNER_READ has
+     *  the AI read the next verse; Solo Read just moves the user on to the next one themselves.
+     *  (Read Aloud never reaches here — the user isn't the one being judged as "reading" in that mode.) */
+    private fun advanceAfterCompleteRead(userVerseIndex: Int) {
+        val bubble = _uiState.value.chatBubble ?: return
+        when (bubble.partnerMode) {
+            PartnerReadingMode.SOLO_READ -> advanceSoloRead(userVerseIndex + 1)
+            else -> advanceToAiVerse(userVerseIndex + 1)
+        }
     }
 
     private fun advanceToAiVerse(aiIdx: Int) {
@@ -816,6 +954,118 @@ class ReaderViewModel(
                 refreshPartnerPrefetchWindow()
             }
         }
+    }
+
+    /** Solo Read: the user reads every verse themselves; the AI never speaks a verse in this
+     *  mode. Advancing here just moves the "current verse" pointer and re-arms listening —
+     *  there's no AI-speaking phase to wait through between verses. */
+    private fun advanceSoloRead(idx: Int) {
+        val state = _uiState.value
+        val verse = state.verses.getOrNull(idx) ?: run { onExitPartnerMode(); return }
+        val bubble = state.chatBubble ?: return
+        _uiState.value = state.copy(
+            chatBubble = bubble.copy(
+                partnerTurn = PartnerTurn.AWAITING_USER,
+                partnerVerseIndex = idx,
+                partnerVerseLabel = "${verse.bookName} ${verse.chapter}:${verse.verse}",
+                partnerVerseText = verse.text,
+            ),
+            partnerHighlightVerseId = verse.numericVerseId,
+            partnerHighlightIsAi = false,
+        )
+        autoStartListeningIfEnabled()
+    }
+
+    /**
+     * Read Aloud: the AI reads every verse in sequence with no user turn at all, pausing only in
+     * the gap *after* each verse to briefly listen for a question before continuing.
+     *
+     * This is NOT true mid-speech interruption — the mic only opens once a verse finishes, not
+     * while the AI is actively speaking. Real barge-in (detecting speech and cutting off TTS
+     * mid-sentence) needs a bidirectional streaming architecture (Gemini's Live API) that this
+     * app's one-shot SpeechRecognizer + non-streaming TTS calls don't support; see
+     * advancements.md. This is the practical approximation: fast enough that it reads as
+     * responsive between verses, without the bigger rewrite.
+     */
+    private fun speakReadAloudVerse(idx: Int) {
+        val state = _uiState.value
+        val verse = state.verses.getOrNull(idx) ?: run { onExitPartnerMode(); return }
+        val bubble = state.chatBubble ?: return
+        _uiState.value = state.copy(
+            chatBubble = bubble.copy(
+                partnerTurn = PartnerTurn.AI_SPEAKING,
+                partnerVerseIndex = idx,
+                partnerVerseLabel = "${verse.bookName} ${verse.chapter}:${verse.verse}",
+                partnerVerseText = verse.text,
+            ),
+            partnerHighlightVerseId = verse.numericVerseId,
+            partnerHighlightIsAi = true,
+        )
+        // Simple one-ahead prefetch — Read Aloud has no alternation to reason about, just the
+        // next verse in line.
+        state.verses.getOrNull(idx + 1)?.let { geminiTts?.prefetch(it.text, state.language.code) }
+        geminiTts?.speak(verse.text, state.language.code) {
+            viewModelScope.launch(Dispatchers.Main) { listenBrieflyForQuestion(idx) }
+        }
+    }
+
+    private fun listenBrieflyForQuestion(justReadIdx: Int) {
+        val bubble = _uiState.value.chatBubble ?: return
+        if (!bubble.partnerMicEnabled) {
+            speakReadAloudVerse(justReadIdx + 1)
+            return
+        }
+        setPartnerTurn(PartnerTurn.LISTENING)
+        partnerListenJob = viewModelScope.launch(Dispatchers.Main) {
+            val ctx = appContext
+            val langTag = localeTagFor(_uiState.value.language.code)
+            val result = if (ctx != null) recognizer?.listenOnce(ctx, langTag) else null
+            result?.fold(
+                onSuccess = { transcript ->
+                    if (transcript.isBlank()) speakReadAloudVerse(justReadIdx + 1)
+                    else handleReadAloudTranscript(transcript, justReadIdx)
+                },
+                onFailure = { speakReadAloudVerse(justReadIdx + 1) }, // silence/timeout — nothing asked, keep going
+            ) ?: speakReadAloudVerse(justReadIdx + 1)
+        }
+    }
+
+    private suspend fun handleReadAloudTranscript(transcript: String, justReadIdx: Int) {
+        val state = _uiState.value
+        val apiKey = ApiKeys.geminiApiKey
+        if (apiKey == null) {
+            speakReadAloudVerse(justReadIdx + 1)
+            return
+        }
+        setPartnerTurn(PartnerTurn.AI_RESPONDING)
+        val expectedText = state.verses.getOrNull(justReadIdx)?.text ?: ""
+        val recentContext = recentVersesContextText(state, justReadIdx)
+        val bubble = _uiState.value.chatBubble
+        val judgment = verseChatClient.judgePartnerReading(
+            apiKey, expectedText, state.language.displayName, transcript, recentContext,
+            bubble?.partnerMessages ?: emptyList(),
+        )
+        judgment.fold(
+            onSuccess = { j ->
+                if (j.kind == PartnerJudgmentKind.QUESTION_OR_STATEMENT) {
+                    val cur = _uiState.value.chatBubble ?: return
+                    val updatedMsgs = cur.partnerMessages +
+                        com.logos.bibletranslate.data.ChatMessage(role = com.logos.bibletranslate.data.ChatRole.USER, text = transcript) +
+                        com.logos.bibletranslate.data.ChatMessage(role = com.logos.bibletranslate.data.ChatRole.ASSISTANT, text = j.reply)
+                    _uiState.value = _uiState.value.copy(
+                        chatBubble = cur.copy(partnerMessages = updatedMsgs, partnerTurn = PartnerTurn.AI_RESPONDING),
+                    )
+                    geminiTts?.speak(j.reply, state.language.code) {
+                        viewModelScope.launch(Dispatchers.Main) { speakReadAloudVerse(justReadIdx + 1) }
+                    } ?: speakReadAloudVerse(justReadIdx + 1)
+                } else {
+                    // Not addressed to the AI (background noise, an echo of the verse just read,
+                    // etc.) — there's no "reading task" to judge in this mode, so just continue.
+                    speakReadAloudVerse(justReadIdx + 1)
+                }
+            },
+            onFailure = { speakReadAloudVerse(justReadIdx + 1) },
+        )
     }
 
     private fun setPartnerTurn(turn: PartnerTurn) {

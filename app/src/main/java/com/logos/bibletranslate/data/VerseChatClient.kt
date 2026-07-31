@@ -37,9 +37,10 @@ private val PARTNER_JUDGMENT_SCHEMA = JSONObject()
         "properties",
         JSONObject()
             .put("kind", JSONObject().put("type", "STRING"))
-            .put("reply", JSONObject().put("type", "STRING")),
+            .put("reply", JSONObject().put("type", "STRING"))
+            .put("isComplete", JSONObject().put("type", "BOOLEAN")),
     )
-    .put("required", JSONArray().put("kind").put("reply"))
+    .put("required", JSONArray().put("kind").put("reply").put("isComplete"))
 
 /**
  * Scoped mini-chatbot for a single selected verse/word (addendum §2). Every
@@ -161,18 +162,24 @@ class VerseChatClient {
     """.trimIndent()
 
     /**
-     * Compares [spokenText] (the user's speech transcript) against [expectedVerseText] and
-     * returns a structured judgment: good read → advance; bad read → gentle retry prompt;
-     * question/statement → conversational answer. The reply is already in [sourceLangName].
+     * Compares [spokenText] (the user's speech transcript, possibly accumulated across more
+     * than one listenOnce() call if an earlier pass was judged incomplete) against
+     * [expectedVerseText] and returns a structured judgment: complete read → advance; incomplete
+     * read → silently keep listening for the rest; question/statement → conversational answer.
+     * The reply is already in [sourceLangName].
      *
-     * This is the only Gemini call partner reading makes per user turn — kept very brief so
-     * the round-trip feels fast between verses.
+     * [recentVersesContext] is a short block of recently-read verse text (not graded against —
+     * purely so a question like "what did the verse before that mean?" has something to recall)
+     * and [history] is the partner session's own running Q&A — both bounded by the caller so this
+     * stays the fast, cheap call it needs to be between verses.
      */
     suspend fun judgePartnerReading(
         apiKey: String,
         expectedVerseText: String,
         sourceLangName: String,
         spokenText: String,
+        recentVersesContext: String,
+        history: List<ChatMessage>,
     ): Result<PartnerReadingJudgment> {
         val system = """
             You are a Bible reading companion running a Partner Reading exercise. The user was
@@ -181,6 +188,10 @@ class VerseChatClient {
 
             Their speech was transcribed as:
             "$spokenText"
+
+            Recently read verses, for your own recall if they ask about something earlier (not
+            something to grade the transcript against):
+            $recentVersesContext
 
             This is a practice/flow exercise, not a grading exercise — the goal is to keep the
             reading moving, not to correct pronunciation or word-perfect accuracy. Speech-to-text
@@ -204,13 +215,24 @@ class VerseChatClient {
               like a knowledgeable, warm reading companion would. Answer whatever they actually
               asked or said — use your own judgment about how to be helpful here rather than
               forcing every reply back onto the current verse; if they go off-topic, engage with
-              that genuinely instead of redirecting them back to the passage.
+              that genuinely instead of redirecting them back to the passage. Use the recently-read
+              verses above if their question refers to something earlier.
+
+            Set "isComplete" (only meaningful when kind is READ_ATTEMPT — set it to true otherwise):
+            - true if the transcript's content reasonably covers the verse from beginning to end —
+              again, imperfect wording/accuracy is completely fine, this is purely about whether
+              they got to the end of the verse, not how well they said it.
+            - false ONLY if the transcript clearly stops partway through and is missing a
+              meaningful trailing portion of the verse — e.g. it covers the first half and then
+              just ends, as if the recognizer cut them off mid-sentence. When genuinely unsure,
+              prefer true — this must not become a new way to nitpick the read.
         """.trimIndent()
-        return callGemini(apiKey, system, emptyList(), spokenText, PARTNER_JUDGMENT_SCHEMA)
+        return callGemini(apiKey, system, history, spokenText, PARTNER_JUDGMENT_SCHEMA)
             .mapCatching { json ->
                 val obj = JSONObject(json)
                 val kindStr = obj.optString("kind", "READ_ATTEMPT")
                 val reply = obj.optString("reply", "")
+                val isComplete = obj.optBoolean("isComplete", true)
                 // READ_ATTEMPT is the new, deliberately-permissive default (see the prompt above)
                 // — everything except an unmistakable question maps to GOOD_READ so the ViewModel
                 // just keeps moving. BAD_READ is still accepted from the model as a synonym in
@@ -221,7 +243,7 @@ class VerseChatClient {
                     "BAD_READ" -> PartnerJudgmentKind.BAD_READ
                     else -> PartnerJudgmentKind.GOOD_READ
                 }
-                PartnerReadingJudgment(kind, reply)
+                PartnerReadingJudgment(kind, reply, isComplete)
             }
     }
 

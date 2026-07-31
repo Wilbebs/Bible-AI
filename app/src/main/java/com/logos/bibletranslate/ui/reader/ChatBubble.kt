@@ -92,6 +92,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import com.logos.bibletranslate.data.ChatRole
+import com.logos.bibletranslate.data.PartnerReadingMode
 import com.logos.bibletranslate.data.PartnerTurn
 import com.logos.bibletranslate.ui.theme.Glass
 import kotlin.math.PI
@@ -207,6 +208,8 @@ fun ChatBubble(
     onPartnerMicTapped: () -> Unit = {},
     /** Toggle the partner mic on/off (pauses/resumes listening). */
     onPartnerMicToggle: () -> Unit = {},
+    /** Switch between Partner Read / Read Aloud / Solo Read. */
+    onPartnerModeChanged: (PartnerReadingMode) -> Unit = {},
     /** Tap the mic in the regular chat input row for free-form voice questions. */
     onChatMicTapped: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -328,8 +331,11 @@ fun ChatBubble(
                 }
                 // Single-row header.
                 // Translator: [Sparkle · VerseRef(weight)] [Pill] [Language] [✕]
-                // Partner:    [Pill] [Language] [Spacer(weight)] [✕]
+                // Partner:    [Pill] [Spacer(weight)] [✕]
                 // ✕ resets *and* closes — it is the single dismiss/reset action.
+                // No language dropdown in partner mode — it always reads whatever translation is
+                // currently loaded, never a separately chosen one; the 3-way mode selector lives
+                // in PartnerReadingBody below instead, where the dropdown used to be conceptually.
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth(),
@@ -347,12 +353,13 @@ fun ChatBubble(
                         onToggle = { if (bubble.isPartnerMode) onExitPartnerMode() else onEnterPartnerMode() },
                         modifier = Modifier.padding(horizontal = 4.dp),
                     )
-                    LanguageDropdown(
-                        options = BibleLanguage.entries.distinctBy { it.code },
-                        selected = bubble.bubbleTargetLanguage,
-                        onSelected = onLanguageChanged,
-                    )
-                    if (bubble.isPartnerMode) {
+                    if (!bubble.isPartnerMode) {
+                        LanguageDropdown(
+                            options = BibleLanguage.entries.distinctBy { it.code },
+                            selected = bubble.bubbleTargetLanguage,
+                            onSelected = onLanguageChanged,
+                        )
+                    } else {
                         Spacer(Modifier.weight(1f))
                     }
                     TextButton(
@@ -371,6 +378,7 @@ fun ChatBubble(
                         micEnabled = bubble.partnerMicEnabled,
                         onMicTapped = onPartnerMicTapped,
                         onMicToggle = onPartnerMicToggle,
+                        onModeChanged = onPartnerModeChanged,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     return@Column
@@ -1099,6 +1107,7 @@ private fun PartnerReadingBody(
     micEnabled: Boolean,
     onMicTapped: () -> Unit,
     onMicToggle: () -> Unit,
+    onModeChanged: (PartnerReadingMode) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val isUserTurn = bubble.partnerTurn == PartnerTurn.AWAITING_USER
@@ -1109,6 +1118,13 @@ private fun PartnerReadingBody(
         modifier = modifier.padding(top = 3.dp, bottom = 1.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
+        // Replaces the old language dropdown, which never made sense in partner mode — it
+        // always reads whatever translation is currently loaded, not a separately chosen one.
+        PartnerModePillSelector(
+            mode = bubble.partnerMode,
+            onModeChanged = onModeChanged,
+            modifier = Modifier.fillMaxWidth(),
+        )
         // Row: [verse ref · turn label] ... [mic icon]
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -1159,6 +1175,58 @@ private fun PartnerReadingBody(
             tint = turnColor,
             modifier = Modifier.fillMaxWidth().height(20.dp),
         )
+    }
+}
+
+/**
+ * Three-way segmented pill: Partner Read (alternate verse by verse) / Read Aloud (AI reads every
+ * verse, brief pause for questions between them) / Solo Read (user reads every verse, AI only
+ * speaks if asked). Sits where the language dropdown used to in partner mode — partner reading
+ * always reads whatever translation is currently loaded, so there was never a real language
+ * choice to make there.
+ */
+@Composable
+private fun PartnerModePillSelector(
+    mode: PartnerReadingMode,
+    onModeChanged: (PartnerReadingMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val options = listOf(
+        PartnerReadingMode.PARTNER_READ to "Partner Read",
+        PartnerReadingMode.READ_ALOUD to "Read Aloud",
+        PartnerReadingMode.SOLO_READ to "Solo Read",
+    )
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+            .padding(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        options.forEach { (optionMode, label) ->
+            val selected = optionMode == mode
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(50))
+                    .background(if (selected) Glass.skyBlue.copy(alpha = 0.25f) else Color.Transparent)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { onModeChanged(optionMode) }
+                    .padding(vertical = 5.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (selected) Glass.skyBlue else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
     }
 }
 

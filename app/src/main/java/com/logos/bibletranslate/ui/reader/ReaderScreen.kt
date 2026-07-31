@@ -698,6 +698,7 @@ fun ReaderScreen(
                             else { pendingMicAction = 0; micPermLauncher.launch(Manifest.permission.RECORD_AUDIO) }
                         },
                         onPartnerMicToggle = viewModel::onPartnerMicToggle,
+                        onPartnerModeChanged = viewModel::onPartnerModeChanged,
                         // Pad the top so the bubble's BoxWithConstraints receives the correct
                     // available height — without this the 70% cap is computed against the
                     // full screen and the panel can slide up behind the floating navbar.

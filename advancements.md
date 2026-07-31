@@ -16,6 +16,15 @@ the same per-call network latency we removed from TTS by moving off a cloud/gene
 Cloud Vision could still make sense for a narrower, occasional case (e.g. "scan this physical
 page" as a one-off high-accuracy capture) but not as the engine for continuous overlay reading.
 
+## True mid-speech barge-in for Read Aloud mode
+
+Read Aloud mode (one of partner reading's three modes) currently only listens for a question in
+the gap *after* each verse finishes, not while the AI is actively speaking — genuinely
+interrupting TTS mid-sentence needs a bidirectional streaming architecture (Gemini's Live API)
+that this app's one-shot SpeechRecognizer + non-streaming TTS calls don't support. Revisit this
+as part of whatever eventually moves partner reading onto the Live API — see the original
+"advanced/uncertain feasibility" note on this from early in the partner-mode work.
+
 ## Cloud-shared TTS cache: bulk chapter fetch, not per-verse
 
 If we ever build a shared/cloud cache for generated verse audio (instead of today's per-device
