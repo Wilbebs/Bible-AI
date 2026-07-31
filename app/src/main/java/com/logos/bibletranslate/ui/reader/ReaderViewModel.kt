@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.logos.bibletranslate.data.ApiKeys
 import com.logos.bibletranslate.data.CloudVoiceSpeaker
+import com.logos.bibletranslate.data.GeminiVoiceSpeaker
 import com.logos.bibletranslate.data.BibleLanguage
 import com.logos.bibletranslate.data.PartnerJudgmentKind
 import com.logos.bibletranslate.data.PartnerSpeechRecognizer
@@ -75,6 +76,17 @@ data class WordInfoState(
      */
     val translation: String? = null,
     val isLoading: Boolean = true,
+    /**
+     * The language [word] is actually written in — NOT necessarily the bubble's currently
+     * selected language. A word tapped from the original scripture text is in the reading
+     * language regardless of what the bubble's dropdown is set to; a word tapped from an AI
+     * response/definition is in whatever language that response was actually generated in
+     * (normally the bubble's target language, but that can differ per-word depending on where
+     * the tap came from). Read-aloud must match this, not the bubble selection, or a Spanish
+     * bubble reading an English word from the original verse would mispronounce it in a
+     * Spanish accent.
+     */
+    val wordLanguageCode: String = "",
 )
 
 /** A tap/drag word selection, now a scoped mini-chat bubble (chat-feature-addendum). */
@@ -234,8 +246,15 @@ class ReaderViewModel(
     private val _uiState = MutableStateFlow(ReaderUiState())
     val uiState: StateFlow<ReaderUiState> = _uiState.asStateFlow()
 
-    /** TTS engine — lazily initialised from the composable via [initTts]; released in [onCleared]. */
-    private var tts: CloudVoiceSpeaker? = null
+    /** Cloud TTS — used for the AI window's instant-feedback reads (tapped words/phrases, chat
+     *  messages, definitions): near-instant response matters more there than voice quality.
+     *  Lazily initialised from the composable via [initTts]; released in [onCleared]. */
+    private var cloudTts: CloudVoiceSpeaker? = null
+    /** Gemini's generative voice — used only for full verse reads (the verse-number speaker icon,
+     *  and every voice in partner reading): a whole verse is long enough, and part of a slower-
+     *  paced reading flow anyway, that Gemini's few-second generation cost is worth it for its
+     *  noticeably more natural voice. */
+    private var geminiTts: GeminiVoiceSpeaker? = null
     /** Speech recogniser for partner reading — created once alongside TTS. */
     private var recognizer: PartnerSpeechRecognizer? = null
     /** Application context stored during initTts — needed for speech recognition. */
@@ -384,7 +403,7 @@ class ReaderViewModel(
             val wordChips = listOf("Use \"$word\" in a sentence") +
                 suggestedChipsFor(state.selectedBookId, bubble.originalLanguageIndex).take(2)
             _uiState.value = state.copy(chatBubble = updatedBubble.copy(
-                wordInfo = WordInfoState(word, isLoading = true),
+                wordInfo = WordInfoState(word, isLoading = true, wordLanguageCode = state.language.code),
                 suggestedChips = wordChips,
             ))
             // The word itself is in the reading language (state.language), but the pronunciation/
@@ -436,7 +455,7 @@ class ReaderViewModel(
                 val wordChips = listOf("Use \"${newQueue.first()}\" in a sentence") +
                     suggestedChipsFor(state.selectedBookId, bubble.originalLanguageIndex).take(2)
                 _uiState.value = state.copy(chatBubble = updatedBubble.copy(
-                    wordInfo = WordInfoState(newQueue.first(), isLoading = true),
+                    wordInfo = WordInfoState(newQueue.first(), isLoading = true, wordLanguageCode = bubble.bubbleTargetLanguage.code),
                     suggestedChips = wordChips,
                 ))
                 fetchWordInfoAsync(verse, newQueue.first(), bubble.bubbleTargetLanguage, bubble.bubbleTargetLanguage, state.language)
@@ -467,10 +486,11 @@ class ReaderViewModel(
 
     /** Call once from the composable (LaunchedEffect) to hand the engine an application context. */
     fun initTts(context: Context) {
-        if (tts == null) {
+        if (cloudTts == null) {
             val appCtx = context.applicationContext
             appContext = appCtx
-            tts = CloudVoiceSpeaker(appCtx) { message -> showToast(message) }
+            cloudTts = CloudVoiceSpeaker(appCtx) { message -> showToast(message) }
+            geminiTts = GeminiVoiceSpeaker(appCtx) { message -> showToast(message) }
             recognizer = PartnerSpeechRecognizer()
             downloadManager = TranslationDownloadManager(appCtx)
             _uiState.value = _uiState.value.copy(
@@ -540,11 +560,13 @@ class ReaderViewModel(
         )
     }
 
-    /** Reads a verse's full text aloud using the verse's reading language locale. */
-    fun onSpeakVerse(text: String, langCode: String) { tts?.speak(text, langCode) }
+    /** Reads a verse's full text aloud using the verse's reading language locale — Gemini's
+     *  voice, since this is a full verse (see [GeminiVoiceSpeaker]'s doc for the reasoning). */
+    fun onSpeakVerse(text: String, langCode: String) { geminiTts?.speak(text, langCode) }
 
-    /** Reads any AI-generated text aloud (initial translation, chat reply, word definition). */
-    fun onSpeakAiText(text: String, langCode: String) { tts?.speak(text, langCode) }
+    /** Reads any AI-generated text aloud (initial translation, chat reply, word definition) —
+     *  Cloud TTS, for near-instant feedback on a single tap. */
+    fun onSpeakAiText(text: String, langCode: String) { cloudTts?.speak(text, langCode) }
 
     /** Toggle the partner mic on/off without changing the turn state. */
     fun onPartnerMicToggle() {
@@ -579,7 +601,10 @@ class ReaderViewModel(
     }
 
     /** Stop any in-progress TTS playback (e.g. when the bubble closes or language changes). */
-    fun onStopSpeaking() { tts?.stop() }
+    fun onStopSpeaking() {
+        cloudTts?.stop()
+        geminiTts?.stop()
+    }
 
     // ── Partner Reading orchestration ────────────────────────────────────────
 
@@ -613,7 +638,7 @@ class ReaderViewModel(
 
     /** Exit partner reading mode, clear all partner highlights. */
     fun onExitPartnerMode() {
-        tts?.stop()
+        geminiTts?.stop()
         val bubble = _uiState.value.chatBubble ?: return
         _uiState.value = _uiState.value.copy(
             chatBubble = bubble.copy(isPartnerMode = false),
@@ -656,7 +681,7 @@ class ReaderViewModel(
         var offset = firstAiOffset
         while (offset <= PARTNER_PREFETCH_LEAD_VERSES) {
             val aiVerse = state.verses.getOrNull(currentIdx + offset) ?: break
-            tts?.prefetch(aiVerse.text, state.language.code)
+            geminiTts?.prefetch(aiVerse.text, state.language.code)
             offset += 2
         }
     }
@@ -725,7 +750,7 @@ class ReaderViewModel(
                                 partnerTurn = PartnerTurn.AI_RESPONDING,
                             ),
                         )
-                        tts?.speak(j.reply, state.language.code) {
+                        geminiTts?.speak(j.reply, state.language.code) {
                             viewModelScope.launch(Dispatchers.Main) {
                                 setPartnerTurn(PartnerTurn.AWAITING_USER)
                                 autoStartListeningIfEnabled()
@@ -771,7 +796,7 @@ class ReaderViewModel(
             partnerHighlightIsAi = true,
         )
         refreshPartnerPrefetchWindow()
-        tts?.speak(aiVerse.text, state.language.code) {
+        geminiTts?.speak(aiVerse.text, state.language.code) {
             viewModelScope.launch(Dispatchers.Main) {
                 val userIdx = aiIdx + 1
                 val userVerse = _uiState.value.verses.getOrNull(userIdx)
@@ -813,7 +838,8 @@ class ReaderViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        tts?.shutdown()
+        cloudTts?.shutdown()
+        geminiTts?.shutdown()
     }
 
     fun onVerseRefTapped(ref: String) {
@@ -853,7 +879,7 @@ class ReaderViewModel(
         val verse = state.verses.firstOrNull { it.numericVerseId == bubble.verseId } ?: return
         val cleaned = word.trim { it.isWhitespace() || it in ",.;:!?\"'“”¡¿()" }
         if (cleaned.isEmpty()) return
-        _uiState.value = state.copy(chatBubble = bubble.copy(wordInfo = WordInfoState(cleaned, isLoading = true)))
+        _uiState.value = state.copy(chatBubble = bubble.copy(wordInfo = WordInfoState(cleaned, isLoading = true, wordLanguageCode = bubble.bubbleTargetLanguage.code)))
         // The definition word is in the target language; translate it back to the source
         // language so the card shows the same cross-language "word · translation" pair as
         // a direct scripture-word tap does.
@@ -871,7 +897,7 @@ class ReaderViewModel(
         val word = bubble.selectedSingleWord ?: return
         val verse = state.verses.firstOrNull { it.numericVerseId == bubble.verseId } ?: return
         _uiState.value = state.copy(
-            chatBubble = bubble.copy(isCondensed = false, wordInfo = WordInfoState(word, isLoading = true)),
+            chatBubble = bubble.copy(isCondensed = false, wordInfo = WordInfoState(word, isLoading = true, wordLanguageCode = state.language.code)),
         )
         fetchWordInfoAsync(verse, word, state.language, bubble.bubbleTargetLanguage, bubble.bubbleTargetLanguage)
     }
@@ -1191,7 +1217,7 @@ class ReaderViewModel(
         val apiKey = ApiKeys.geminiApiKey
         if (apiKey == null) {
             val current = _uiState.value.chatBubble ?: return
-            _uiState.value = _uiState.value.copy(chatBubble = current.copy(wordInfo = WordInfoState(word, isLoading = false)))
+            _uiState.value = _uiState.value.copy(chatBubble = current.copy(wordInfo = WordInfoState(word, isLoading = false, wordLanguageCode = wordLanguage.code)))
             return
         }
         val verseRef = "${verse.bookName} ${verse.chapter}:${verse.verse}"
@@ -1205,9 +1231,9 @@ class ReaderViewModel(
             _uiState.value = _uiState.value.copy(
                 chatBubble = result.fold(
                     onSuccess = { (pronunciation, definition, translation) ->
-                        current.copy(wordInfo = WordInfoState(word, pronunciation, definition, translation, isLoading = false))
+                        current.copy(wordInfo = WordInfoState(word, pronunciation, definition, translation, isLoading = false, wordLanguageCode = wordLanguage.code))
                     },
-                    onFailure = { current.copy(wordInfo = WordInfoState(word, isLoading = false)) },
+                    onFailure = { current.copy(wordInfo = WordInfoState(word, isLoading = false, wordLanguageCode = wordLanguage.code)) },
                 ),
             )
         }

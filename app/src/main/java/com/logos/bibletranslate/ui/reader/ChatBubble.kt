@@ -428,12 +428,13 @@ fun ChatBubble(
                                 ?.takeIf { it == info.word && !bubble.initialIsLoading }
                                 ?.let { bubble.initialTranslation },
                         onDefinitionWordTapped = onDefinitionWordTapped,
-                        // Matches the other two speaker icons (header translation, chat
-                        // messages) in reading with whatever language is currently selected in
-                        // the bubble's own dropdown, not the fixed scripture reading language —
-                        // otherwise a word read stays pinned to the reading accent even after the
-                        // user switches the bubble to a different language.
-                        onSpeak = { onSpeakAiText(info.word, bubble.bubbleTargetLanguage.code) },
+                        // Reads in whatever language info.word is actually written in — which is
+                        // NOT always the bubble's currently selected language. A word tapped from
+                        // the original scripture text is in the reading language regardless of
+                        // the dropdown; a word tapped from an AI response/definition is in
+                        // whatever language that text was actually generated in. See
+                        // WordInfoState.wordLanguageCode's doc for the full reasoning.
+                        onSpeak = { onSpeakAiText(info.word, info.wordLanguageCode) },
                     )
                 }
 
