@@ -185,6 +185,16 @@ data class ChatBubbleState(
      *  transcript that can never be judged complete (e.g. via a device/locale recognition quirk)
      *  can't stall the session forever. */
     val partnerIncompleteRetryCount: Int = 0,
+    /**
+     * Solo Read only: the verse index it started at, and a running word count of everything
+     * judged a reading attempt since then. Solo Read never gates listening on matching an exact
+     * verse — a strict per-verse turn cycle can't keep up with someone reading faster than the
+     * app can judge-and-re-arm, which used to desync the tracked verse from where they actually
+     * were. Position is instead estimated from these two (see estimateSoloReadIndex), purely for
+     * question-recall context — it never blocks or gates anything.
+     */
+    val partnerReadAnchorIndex: Int = 0,
+    val partnerReadWordsSinceStart: Int = 0,
 )
 
 data class VerseTranslationEntry(val language: BibleLanguage, val text: String?)
@@ -714,10 +724,43 @@ class ReaderViewModel(
     }
 
     private fun startPartnerModeAt(idx: Int) {
+        prefetchChapterForPartnerMode(idx)
         when (_uiState.value.chatBubble?.partnerMode) {
             PartnerReadingMode.READ_ALOUD -> speakReadAloudVerse(idx)
-            PartnerReadingMode.SOLO_READ -> advanceSoloRead(idx)
+            PartnerReadingMode.SOLO_READ -> startSoloRead(idx)
             else -> speakAiPartnerVerse(idx) // PARTNER_READ (default) and null (shouldn't happen)
+        }
+    }
+
+    /**
+     * Fires the moment Bible Buddy mode starts (or its mode changes): requests every AI-relevant
+     * verse in the rest of the current chapter be generated in the background, prioritizing the
+     * first few so reading can start promptly while the rest keeps warming up behind it. This is
+     * a deliberately bigger prefetch than [refreshPartnerPrefetchWindow]'s steady trickle — per
+     * explicit direction, the cost/latency of eagerly generating a whole chapter's worth up front
+     * is an acceptable trade for never hitting a cold cache partway through a session. Skipped
+     * entirely for Solo Read, since the AI never speaks a verse in that mode.
+     */
+    private fun prefetchChapterForPartnerMode(anchorIdx: Int) {
+        val state = _uiState.value
+        val bubble = state.chatBubble ?: return
+        if (bubble.partnerMode == PartnerReadingMode.SOLO_READ) return
+        val anchorVerse = state.verses.getOrNull(anchorIdx) ?: return
+        val chapterVerses = state.verses.drop(anchorIdx)
+            .takeWhile { it.bookId == anchorVerse.bookId && it.chapter == anchorVerse.chapter }
+        // PARTNER_READ only ever has the AI speak every other verse starting at the anchor;
+        // READ_ALOUD has it speak every verse in the chapter.
+        val relevantOffsets = if (bubble.partnerMode == PartnerReadingMode.READ_ALOUD) {
+            chapterVerses.indices.toList()
+        } else {
+            chapterVerses.indices.filter { it % 2 == 0 }
+        }
+        // First 5 verse-slots requested first (fast enough to matter for how soon reading can
+        // start), the remainder of the chapter right behind them.
+        val prioritized = relevantOffsets.sortedBy { if (it < 5) it else it + 1000 }
+        for (offset in prioritized) {
+            val verse = chapterVerses.getOrNull(offset) ?: continue
+            geminiTts?.prefetch(verse.text, state.language.code)
         }
     }
 
@@ -797,6 +840,12 @@ class ReaderViewModel(
     private suspend fun handlePartnerTranscript(transcript: String) {
         val state = _uiState.value
         val bubble = state.chatBubble ?: return
+        // Solo Read has its own simpler path — no per-verse turn to gate on (see
+        // handleSoloReadTranscript's doc for why).
+        if (bubble.partnerMode == PartnerReadingMode.SOLO_READ) {
+            handleSoloReadTranscript(transcript)
+            return
+        }
         val verses = state.verses
         val userVerseIndex = bubble.partnerVerseIndex
         val expectedText = verses.getOrNull(userVerseIndex)?.text ?: return
@@ -898,15 +947,11 @@ class ReaderViewModel(
         )
     }
 
-    /** A read was judged complete — advance however the current mode advances. PARTNER_READ has
-     *  the AI read the next verse; Solo Read just moves the user on to the next one themselves.
-     *  (Read Aloud never reaches here — the user isn't the one being judged as "reading" in that mode.) */
+    /** A read was judged complete — the AI reads the next verse. Only PARTNER_READ reaches this
+     *  (Solo Read shortcuts to [handleSoloReadTranscript] before this point; Read Aloud never
+     *  judges the user as "reading" at all). */
     private fun advanceAfterCompleteRead(userVerseIndex: Int) {
-        val bubble = _uiState.value.chatBubble ?: return
-        when (bubble.partnerMode) {
-            PartnerReadingMode.SOLO_READ -> advanceSoloRead(userVerseIndex + 1)
-            else -> advanceToAiVerse(userVerseIndex + 1)
-        }
+        advanceToAiVerse(userVerseIndex + 1)
     }
 
     private fun advanceToAiVerse(aiIdx: Int) {
@@ -956,10 +1001,20 @@ class ReaderViewModel(
         }
     }
 
-    /** Solo Read: the user reads every verse themselves; the AI never speaks a verse in this
-     *  mode. Advancing here just moves the "current verse" pointer and re-arms listening —
-     *  there's no AI-speaking phase to wait through between verses. */
-    private fun advanceSoloRead(idx: Int) {
+    /**
+     * Solo Read: the user reads every verse themselves at their own pace; the AI never speaks a
+     * verse in this mode, only listening and only ever speaking up if asked a question.
+     *
+     * Deliberately does NOT highlight a specific verse or gate listening on matching one exactly.
+     * A strict per-verse turn cycle (judge → advance → re-arm the mic) can't keep up with someone
+     * reading verses back-to-back faster than that round trip, which used to desync the tracked
+     * "current" verse from wherever the user actually was — and once desynced, a resumed read
+     * after a Q&A tangent could get compared against the wrong verse and misjudged. Instead,
+     * listening is continuous (every result immediately re-arms it, regardless of content) and
+     * position is only ever an approximate estimate — see [estimateSoloReadIndex] — used purely
+     * for judgePartnerReading's own context, never to block or gate anything.
+     */
+    private fun startSoloRead(idx: Int) {
         val state = _uiState.value
         val verse = state.verses.getOrNull(idx) ?: run { onExitPartnerMode(); return }
         val bubble = state.chatBubble ?: return
@@ -969,11 +1024,97 @@ class ReaderViewModel(
                 partnerVerseIndex = idx,
                 partnerVerseLabel = "${verse.bookName} ${verse.chapter}:${verse.verse}",
                 partnerVerseText = verse.text,
+                partnerReadAnchorIndex = idx,
+                partnerReadWordsSinceStart = 0,
             ),
-            partnerHighlightVerseId = verse.numericVerseId,
-            partnerHighlightIsAi = false,
+            partnerHighlightVerseId = null,
+            partnerHighlightIsAi = null,
         )
         autoStartListeningIfEnabled()
+    }
+
+    /** Solo Read's transcript handling — no per-verse gating (see [startSoloRead]'s doc): every
+     *  transcript is classified as either a question (answered, conversation continues) or a
+     *  reading attempt (position estimate nudged forward, mic immediately re-armed either way).
+     *  Nothing here ever blocks listening on judging completeness or matching an exact verse. */
+    private suspend fun handleSoloReadTranscript(transcript: String) {
+        val state = _uiState.value
+        val bubble = state.chatBubble ?: return
+        val apiKey = ApiKeys.geminiApiKey ?: return
+        setPartnerTurn(PartnerTurn.AI_RESPONDING)
+
+        val currentIdx = bubble.partnerVerseIndex
+        val expectedText = state.verses.getOrNull(currentIdx)?.text ?: ""
+        val recentContext = recentVersesContextText(state, currentIdx)
+        val judgment = verseChatClient.judgePartnerReading(
+            apiKey, expectedText, state.language.displayName, transcript, recentContext, bubble.partnerMessages,
+        )
+
+        judgment.fold(
+            onSuccess = { j ->
+                if (j.kind == PartnerJudgmentKind.QUESTION_OR_STATEMENT) {
+                    val cur = _uiState.value.chatBubble ?: return
+                    val updatedMsgs = cur.partnerMessages +
+                        com.logos.bibletranslate.data.ChatMessage(role = com.logos.bibletranslate.data.ChatRole.USER, text = transcript) +
+                        com.logos.bibletranslate.data.ChatMessage(role = com.logos.bibletranslate.data.ChatRole.ASSISTANT, text = j.reply)
+                    _uiState.value = _uiState.value.copy(
+                        chatBubble = cur.copy(partnerMessages = updatedMsgs, partnerTurn = PartnerTurn.AI_RESPONDING),
+                    )
+                    geminiTts?.speak(j.reply, state.language.code) {
+                        viewModelScope.launch(Dispatchers.Main) {
+                            setPartnerTurn(PartnerTurn.AWAITING_USER)
+                            autoStartListeningIfEnabled()
+                        }
+                    } ?: run {
+                        setPartnerTurn(PartnerTurn.AWAITING_USER)
+                        autoStartListeningIfEnabled()
+                    }
+                } else {
+                    // A reading attempt — nudge the rough position estimate forward and keep
+                    // listening right away. No completeness requirement, no retry cap: this mode
+                    // never blocks on "did you finish that exact verse."
+                    val wordCount = transcript.trim().split(Regex("\\s+")).count { it.isNotBlank() }
+                    val cur = _uiState.value.chatBubble ?: return
+                    val newWordsSoFar = cur.partnerReadWordsSinceStart + wordCount
+                    val newIdx = estimateSoloReadIndex(state, cur.partnerReadAnchorIndex, newWordsSoFar)
+                    val newVerse = state.verses.getOrNull(newIdx)
+                    _uiState.value = _uiState.value.copy(
+                        chatBubble = cur.copy(
+                            partnerReadWordsSinceStart = newWordsSoFar,
+                            partnerVerseIndex = newIdx,
+                            partnerVerseLabel = newVerse?.let { "${it.bookName} ${it.chapter}:${it.verse}" } ?: cur.partnerVerseLabel,
+                            partnerVerseText = newVerse?.text ?: cur.partnerVerseText,
+                        ),
+                    )
+                    setPartnerTurn(PartnerTurn.AWAITING_USER)
+                    autoStartListeningIfEnabled()
+                }
+            },
+            onFailure = { err ->
+                showToast(err.message ?: "Couldn't process that — try again.")
+                setPartnerTurn(PartnerTurn.AWAITING_USER)
+                autoStartListeningIfEnabled()
+            },
+        )
+    }
+
+    /** Rough, non-blocking Solo Read position estimate: walks forward from [anchorIdx] through
+     *  the chapter, consuming [wordsSoFar] against each verse's own word count, and returns
+     *  whichever verse that lands on. Never exact, never needs to be — it only feeds
+     *  judgePartnerReading's own context (item: "does it know when I've moved to the next
+     *  verse"), not any gating decision. */
+    private fun estimateSoloReadIndex(state: ReaderUiState, anchorIdx: Int, wordsSoFar: Int): Int {
+        val anchorVerse = state.verses.getOrNull(anchorIdx) ?: return anchorIdx
+        val chapterVerses = state.verses.drop(anchorIdx)
+            .takeWhile { it.bookId == anchorVerse.bookId && it.chapter == anchorVerse.chapter }
+        if (chapterVerses.isEmpty()) return anchorIdx
+        var remaining = wordsSoFar
+        for ((i, verse) in chapterVerses.withIndex()) {
+            val verseWords = verse.text.trim().split(Regex("\\s+")).count { it.isNotBlank() }.coerceAtLeast(1)
+            if (remaining < verseWords) return anchorIdx + i
+            remaining -= verseWords
+        }
+        return anchorIdx + chapterVerses.lastIndex // ran past the chapter — stay on the last verse
     }
 
     /**

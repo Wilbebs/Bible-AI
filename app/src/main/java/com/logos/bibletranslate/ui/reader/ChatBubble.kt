@@ -59,7 +59,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.ButtonDefaults
@@ -334,8 +336,9 @@ fun ChatBubble(
                 // Partner:    [Pill] [Spacer(weight)] [✕]
                 // ✕ resets *and* closes — it is the single dismiss/reset action.
                 // No language dropdown in partner mode — it always reads whatever translation is
-                // currently loaded, never a separately chosen one; the 3-way mode selector lives
-                // in PartnerReadingBody below instead, where the dropdown used to be conceptually.
+                // currently loaded, never a separately chosen one; the 3-way mode selector sits
+                // right beside the Translator/Partner switch instead, where the dropdown used to
+                // be conceptually.
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth(),
@@ -360,6 +363,10 @@ fun ChatBubble(
                             onSelected = onLanguageChanged,
                         )
                     } else {
+                        PartnerModePillSelector(
+                            mode = bubble.partnerMode,
+                            onModeChanged = onPartnerModeChanged,
+                        )
                         Spacer(Modifier.weight(1f))
                     }
                     TextButton(
@@ -378,7 +385,6 @@ fun ChatBubble(
                         micEnabled = bubble.partnerMicEnabled,
                         onMicTapped = onPartnerMicTapped,
                         onMicToggle = onPartnerMicToggle,
-                        onModeChanged = onPartnerModeChanged,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     return@Column
@@ -1107,7 +1113,6 @@ private fun PartnerReadingBody(
     micEnabled: Boolean,
     onMicTapped: () -> Unit,
     onMicToggle: () -> Unit,
-    onModeChanged: (PartnerReadingMode) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val isUserTurn = bubble.partnerTurn == PartnerTurn.AWAITING_USER
@@ -1118,13 +1123,6 @@ private fun PartnerReadingBody(
         modifier = modifier.padding(top = 3.dp, bottom = 1.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        // Replaces the old language dropdown, which never made sense in partner mode — it
-        // always reads whatever translation is currently loaded, not a separately chosen one.
-        PartnerModePillSelector(
-            mode = bubble.partnerMode,
-            onModeChanged = onModeChanged,
-            modifier = Modifier.fillMaxWidth(),
-        )
         // Row: [verse ref · turn label] ... [mic icon]
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -1181,9 +1179,14 @@ private fun PartnerReadingBody(
 /**
  * Three-way segmented pill: Partner Read (alternate verse by verse) / Read Aloud (AI reads every
  * verse, brief pause for questions between them) / Solo Read (user reads every verse, AI only
- * speaks if asked). Sits where the language dropdown used to in partner mode — partner reading
- * always reads whatever translation is currently loaded, so there was never a real language
- * choice to make there.
+ * speaks if asked). Sits right beside [PartnerModeSwitch] where the language dropdown used to be
+ * in partner mode — partner reading always reads whatever translation is currently loaded, so
+ * there was never a real language choice to make there.
+ *
+ * Idle footprint is ~1.5× [PartnerModeSwitch]'s 40dp width (icon-only, no room for three text
+ * labels at once) so the two toggles read as a matched pair. Tapping a segment switches modes and
+ * briefly expands the pill so the just-picked mode's label is actually readable, then collapses
+ * back to the compact icon row a couple seconds later.
  */
 @Composable
 private fun PartnerModePillSelector(
@@ -1192,39 +1195,66 @@ private fun PartnerModePillSelector(
     modifier: Modifier = Modifier,
 ) {
     val options = listOf(
-        PartnerReadingMode.PARTNER_READ to "Partner Read",
-        PartnerReadingMode.READ_ALOUD to "Read Aloud",
-        PartnerReadingMode.SOLO_READ to "Solo Read",
+        Triple(PartnerReadingMode.PARTNER_READ, "Partner Read", Icons.Filled.SwapHoriz),
+        Triple(PartnerReadingMode.READ_ALOUD, "Read Aloud", Icons.Filled.VolumeUp),
+        Triple(PartnerReadingMode.SOLO_READ, "Solo Read", Icons.Filled.Person),
     )
+    var expanded by remember { mutableStateOf(false) }
+    var expandTrigger by remember { mutableStateOf(0) }
+    LaunchedEffect(expandTrigger) {
+        if (expandTrigger > 0) {
+            expanded = true
+            delay(1800)
+            expanded = false
+        }
+    }
+    val width by animateDpAsState(targetValue = if (expanded) 150.dp else 60.dp, label = "partnerPillWidth")
+
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(50))
-            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+            .width(width)
+            .height(22.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.09f))
             .padding(2.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        options.forEach { (optionMode, label) ->
+        options.forEach { (optionMode, label, icon) ->
             val selected = optionMode == mode
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(50))
+                    .clip(RoundedCornerShape(9.dp))
                     .background(if (selected) Glass.skyBlue.copy(alpha = 0.25f) else Color.Transparent)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
-                    ) { onModeChanged(optionMode) }
-                    .padding(vertical = 5.dp),
+                    ) {
+                        onModeChanged(optionMode)
+                        expandTrigger++
+                    }
+                    .padding(vertical = 3.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    label,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (selected) Glass.skyBlue else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
-                )
+                if (selected && expanded) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Glass.skyBlue,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 2.dp),
+                    )
+                } else {
+                    Icon(
+                        icon,
+                        contentDescription = label,
+                        modifier = Modifier.size(11.dp),
+                        tint = if (selected) Glass.skyBlue else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                    )
+                }
             }
         }
     }

@@ -1,6 +1,7 @@
 package com.logos.bibletranslate.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -196,17 +197,30 @@ class VerseChatClient {
             This is a practice/flow exercise, not a grading exercise — the goal is to keep the
             reading moving, not to correct pronunciation or word-perfect accuracy. Speech-to-text
             transcripts of a second language are frequently garbled, code-switched, or only
-            partially recognized even when the person read it just fine out loud, so default to
-            treating this as a genuine (if imperfect) reading attempt unless it is UNMISTAKABLY
-            a question or comment instead of a reading attempt (e.g. "what does this mean",
-            "wait, can you explain that", "I have a question").
+            partially recognized even when the person read it just fine out loud, so a rough or
+            imperfect transcript is NOT by itself a reason to call this a question — only its
+            actual content decides that.
 
             Classify into exactly one of:
-            - READ_ATTEMPT : Any attempt to read the verse — including mispronunciations, missed
-              words, accent-driven transcription errors, or a transcript that only loosely
-              resembles the verse. This is the default; use it unless the case below clearly applies.
-            - QUESTION_OR_STATEMENT : They unmistakably asked a question or made a comment instead
-              of attempting to read.
+            - READ_ATTEMPT : The transcript's words substantially overlap with or resemble the
+              expected verse text above — even badly mangled by transcription (missed words,
+              accent-driven errors, code-switching, only loosely resembling the verse). Use this
+              whenever the transcript is recognizably an attempt at THIS verse's actual content,
+              however rough the transcription is.
+            - QUESTION_OR_STATEMENT : The transcript does NOT meaningfully share content with the
+              expected verse — it's asking something, commenting, or continuing a conversation
+              instead. This explicitly includes short follow-ups ("why?", "what about that part?",
+              "can you explain more", "and?") that only make sense in light of the conversation
+              history above — if the history shows you just answered a question, a short,
+              verse-unrelated utterance right after is almost always another follow-up in that
+              same conversation, not a garbled reading attempt. People essentially never resume
+              reading with a one- or two-word reply to their own question's answer.
+
+            When torn between the two, ask: does this transcript share real content with the
+            verse text, or does it read as directed at you as a conversational partner (including
+            continuing something from the history above)? Favor READ_ATTEMPT only when there's
+            actual overlap with the verse itself; favor QUESTION_OR_STATEMENT whenever the
+            transcript reads as talking TO you rather than reciting scripture.
 
             Set "kind" to one of those two exact strings.
             Set "reply":
@@ -247,7 +261,35 @@ class VerseChatClient {
             }
     }
 
+    private fun isTransient(code: Int) = code == 503 || code == 429 || code == 500
+
+    private class TransientHttpException(val code: Int, message: String) : Exception(message)
+
+    /** Retries transient failures (Gemini capacity/rate errors, and read timeouts — a stalled
+     *  request is often faster to just retry than to keep waiting on) up to twice with a short
+     *  backoff before giving up, the same pattern used for TTS's transient-error handling. This
+     *  is the only Gemini call partner reading makes per turn, so a single hard failure here used
+     *  to surface as a bare "timed out" with no recovery. */
     private suspend fun callGemini(
+        apiKey: String,
+        systemInstruction: String,
+        history: List<ChatMessage>,
+        userMessage: String,
+        responseSchema: JSONObject?,
+    ): Result<String> {
+        for (attempt in 0..2) {
+            if (attempt > 0) delay(400L * attempt)
+            val result = callGeminiOnce(apiKey, systemInstruction, history, userMessage, responseSchema)
+            if (result.isSuccess) return result
+            val transient = result.exceptionOrNull() is TransientHttpException ||
+                result.exceptionOrNull() is java.net.SocketTimeoutException
+            if (!transient) return result
+            if (attempt == 2) return Result.failure(Exception("Gemini is busy right now — try again in a moment."))
+        }
+        error("unreachable")
+    }
+
+    private suspend fun callGeminiOnce(
         apiKey: String,
         systemInstruction: String,
         history: List<ChatMessage>,
@@ -275,7 +317,7 @@ class VerseChatClient {
             connection.setRequestProperty("Content-Type", "application/json")
             connection.doOutput = true
             connection.connectTimeout = 15_000
-            connection.readTimeout = 15_000
+            connection.readTimeout = 12_000
 
             val generationConfig = JSONObject().put("temperature", 0.3)
             if (responseSchema != null) {
@@ -295,7 +337,9 @@ class VerseChatClient {
             OutputStreamWriter(connection.outputStream).use { it.write(body.toString()) }
 
             if (connection.responseCode !in 200..299) {
-                val error = connection.errorStream?.bufferedReader()?.readText() ?: "HTTP ${connection.responseCode}"
+                val code = connection.responseCode
+                if (isTransient(code)) return@withContext Result.failure(TransientHttpException(code, "HTTP $code"))
+                val error = connection.errorStream?.bufferedReader()?.readText() ?: "HTTP $code"
                 return@withContext Result.failure(Exception(error.take(200)))
             }
 
