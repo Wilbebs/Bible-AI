@@ -560,9 +560,9 @@ class ReaderViewModel(
         )
     }
 
-    /** Reads a verse's full text aloud using the verse's reading language locale — Gemini's
-     *  voice, since this is a full verse (see [GeminiVoiceSpeaker]'s doc for the reasoning). */
-    fun onSpeakVerse(text: String, langCode: String) { geminiTts?.speak(text, langCode) }
+    /** Reads a verse's full text aloud using the verse's reading language locale — Cloud TTS,
+     *  same as every other speaker icon. Gemini's voice is reserved for partner reading only. */
+    fun onSpeakVerse(text: String, langCode: String) { cloudTts?.speak(text, langCode) }
 
     /** Reads any AI-generated text aloud (initial translation, chat reply, word definition) —
      *  Cloud TTS, for near-instant feedback on a single tap. */

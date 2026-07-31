@@ -35,12 +35,12 @@ private const val TTS_MODEL_FALLBACK = "gemini-2.5-flash-preview-tts"
  * (partner reading uses this to generate the AI's next verse in the background while the user
  * is still reading theirs, so by the time it's needed it's often already sitting on disk).
  *
- * Deliberately used only for full verse reads (the verse-number speaker icon, and partner
- * reading's turn-by-turn verses/replies) — not for the AI window's word/phrase/chat-message
- * speaker icons, which use [CloudVoiceSpeaker] instead for its near-instant response time. A
- * whole verse is long enough, and part of a slower-paced reading flow anyway, that Gemini's
- * few-second generation cost is worth paying for its noticeably more natural voice; a single
- * word tapped for instant feedback is not.
+ * Deliberately scoped to partner reading's own turn-by-turn verses/replies only — every other
+ * speaker icon in the app (the verse-number "read this verse" icon, and the AI window's word/
+ * phrase/chat-message reads) uses [CloudVoiceSpeaker] instead for its near-instant response
+ * time. Partner reading is a slower-paced, back-and-forth exercise where a few seconds of
+ * generation is an acceptable trade for Gemini's noticeably more natural voice; a tap-and-hear
+ * speaker icon is not.
  *
  * [speak] is not suspend, starts its own network + playback job, and a new call cancels
  * whatever the previous one was doing (mirrors the old Android TTS engine's QUEUE_FLUSH
