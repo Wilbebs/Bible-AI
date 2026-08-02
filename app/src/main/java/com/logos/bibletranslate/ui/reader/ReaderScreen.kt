@@ -408,63 +408,66 @@ fun ReaderScreen(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            // Explicit chapter navigation — the only way to move between chapters
-                            // now that scrolling stops dead at a chapter's own last/first verse
-                            // instead of silently pulling in the next/previous one. Compact
-                            // chevrons flanking the book/chapter pill read as a natural pair with
-                            // it, matching how page-turn controls sit next to a chapter selector
-                            // in most reading apps.
-                            IconButton(
-                                onClick = {
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    viewModel.onPreviousChapter()
-                                },
-                                modifier = Modifier.size(28.dp),
-                            ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                                    contentDescription = "Previous chapter",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            // Book/chapter: frosted-glass pill, no visible border — the iOS 27
-                            // approach where controls look pressed into the glass surface rather
-                            // than layered on top of it. Box+clickable instead of TextButton
-                            // so we fully own the background and shape without fighting Material.
-                            Box(
+                            // Book/chapter + explicit prev/next navigation, all one pill: "‹ [book
+                            // ch ▾] ›" — the only way to move between chapters now that scrolling
+                            // stops dead at a chapter's own last/first verse instead of silently
+                            // pulling in the next/previous one. One frosted-glass pill (not three
+                            // separate controls) keeps it compact and reads as a single grouped
+                            // control rather than eating extra navbar width.
+                            Row(
                                 modifier = Modifier
-                                    .widthIn(max = 128.dp)
                                     .clip(RoundedCornerShape(50))
                                     .background(
                                         if (Glass.isDarkMode) Color.White.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.62f),
                                         RoundedCornerShape(50),
-                                    )
-                                    .clickable {
+                                    ),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                IconButton(
+                                    onClick = {
                                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        showBookChapterPicker = true
-                                    }
-                                    .padding(horizontal = 12.dp, vertical = 7.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    "$displayedBookName $displayedChapter ▾",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            IconButton(
-                                onClick = {
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    viewModel.onNextChapter()
-                                },
-                                modifier = Modifier.size(28.dp),
-                            ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                    contentDescription = "Next chapter",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                                        viewModel.onPreviousChapter()
+                                    },
+                                    modifier = Modifier.size(24.dp),
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                                        contentDescription = "Previous chapter",
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .widthIn(max = 108.dp)
+                                        .clickable {
+                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            showBookChapterPicker = true
+                                        }
+                                        .padding(horizontal = 2.dp, vertical = 7.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        "$displayedBookName $displayedChapter ▾",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.onNextChapter()
+                                    },
+                                    modifier = Modifier.size(24.dp),
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                        contentDescription = "Next chapter",
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
                             // Language picker: same liquid-glass treatment but tinted sky-blue.
                             CompactReadingLanguagePicker(
@@ -656,6 +659,8 @@ fun ReaderScreen(
                     onToggleBookmark = viewModel::onToggleBookmark,
                     partnerHighlightVerseId = uiState.partnerHighlightVerseId,
                     partnerHighlightIsAi = uiState.partnerHighlightIsAi,
+                    onPreviousChapter = viewModel::onPreviousChapter,
+                    onNextChapter = viewModel::onNextChapter,
                 )
             }
 
@@ -782,6 +787,8 @@ private fun VerseList(
     partnerHighlightVerseId: Long? = null,
     /** True = AI's verse (first accent color); false = user's verse (last); null = no highlight. */
     partnerHighlightIsAi: Boolean? = null,
+    onPreviousChapter: () -> Unit = {},
+    onNextChapter: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -800,9 +807,6 @@ private fun VerseList(
                 bubbleForThisVerse?.let { it.wordRange.toSet() + it.queuedWordIndices.toSet() } ?: emptySet()
             }
             Column {
-                // Reading now flows continuously across chapter (and book) boundaries, so a
-                // small inline heading at the start of each new chapter is the only orientation
-                // cue left — there's no longer a hard stop that otherwise made this obvious.
                 if (verse.verse == 1) {
                     Text(
                         "${verse.bookName} ${verse.chapter}",
@@ -834,6 +838,73 @@ private fun VerseList(
                     onToggleBookmark = { onToggleBookmark(verse.numericVerseId) },
                 )
             }
+        }
+        item {
+            // Second way to move between chapters — right where a reader naturally lands after
+            // finishing the last verse, alongside the navbar's compact chevrons.
+            ChapterNavFooter(
+                onPreviousChapter = onPreviousChapter,
+                onNextChapter = onNextChapter,
+                modifier = Modifier.fillMaxWidth().padding(top = 28.dp, bottom = 32.dp),
+            )
+        }
+    }
+}
+
+/** Previous/Next chapter pills, centered at the bottom of the verse list. */
+@Composable
+private fun ChapterNavFooter(
+    onPreviousChapter: () -> Unit,
+    onNextChapter: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ChapterNavPill(
+            label = "Previous",
+            icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+            iconLeading = true,
+            onClick = onPreviousChapter,
+        )
+        ChapterNavPill(
+            label = "Next",
+            icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            iconLeading = false,
+            onClick = onNextChapter,
+        )
+    }
+}
+
+@Composable
+private fun ChapterNavPill(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    iconLeading: Boolean,
+    onClick: () -> Unit,
+) {
+    val haptics = LocalHapticFeedback.current
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(Glass.skyBlue.copy(alpha = 0.14f))
+            .clickable {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                onClick()
+            }
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (iconLeading) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = Glass.skyBlue)
+            Spacer(Modifier.width(2.dp))
+        }
+        Text(label, style = MaterialTheme.typography.labelLarge, color = Glass.skyBlue)
+        if (!iconLeading) {
+            Spacer(Modifier.width(2.dp))
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = Glass.skyBlue)
         }
     }
 }
