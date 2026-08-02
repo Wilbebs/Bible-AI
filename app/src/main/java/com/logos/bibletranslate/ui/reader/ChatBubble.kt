@@ -1123,11 +1123,22 @@ private fun PartnerReadingBody(
         modifier = modifier.padding(top = 3.dp, bottom = 1.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        // Row: [verse ref · turn label] ... [mic icon]
+        // Row: [spinner] [verse ref · turn label] ... [mic icon]
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
         ) {
+            // A small "please wait" spinner while a verse is generating/being spoken or a
+            // judgment/answer is being worked out — the loading gap used to have no visual
+            // feedback at all, which read as the app being stuck rather than just busy.
+            val isBusy = bubble.partnerTurn == PartnerTurn.AI_SPEAKING || bubble.partnerTurn == PartnerTurn.AI_RESPONDING
+            if (isBusy) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp).padding(end = 5.dp),
+                    strokeWidth = 1.5.dp,
+                    color = turnColor,
+                )
+            }
             Text(
                 text = buildString {
                     if (bubble.partnerVerseLabel.isNotBlank()) {

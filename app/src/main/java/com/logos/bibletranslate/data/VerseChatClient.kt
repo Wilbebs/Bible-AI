@@ -14,8 +14,11 @@ private const val MODEL = "gemini-3.1-flash-lite"
 /** judgePartnerReading specifically uses the fuller model, not flash-lite — distinguishing "is
  *  this a read attempt or a question" turned out to need real reasoning on short, noisy
  *  transcripts that flash-lite kept getting wrong (swallowing genuine questions, especially
- *  short follow-ups, as reading attempts). Worth the extra latency/cost per explicit direction. */
-private const val JUDGMENT_MODEL = "gemini-3.1-flash"
+ *  short follow-ups, as reading attempts). Worth the extra latency/cost per explicit direction.
+ *  "gemini-3.1-flash" (no "-lite") turned out not to be a real model at all — 3.1 apparently only
+ *  ever shipped as flash-lite, with the full-size tier having moved straight to 3.6 — so this
+ *  was a bad guess at a name, not a stale/deprecated one; gemini-3.6-flash is confirmed current. */
+private const val JUDGMENT_MODEL = "gemini-3.6-flash"
 
 private val DETECTION_RESPONSE_SCHEMA = JSONObject()
     .put("type", "OBJECT")
@@ -256,7 +259,12 @@ class VerseChatClient {
               just ends, as if the recognizer cut them off mid-sentence. When genuinely unsure,
               prefer true — this must not become a new way to nitpick the read.
         """.trimIndent()
-        return callGemini(apiKey, system, history, spokenText, PARTNER_JUDGMENT_SCHEMA, model = JUDGMENT_MODEL)
+        // Falls back to the confirmed-working MODEL if JUDGMENT_MODEL's name turns out to be bad
+        // (exactly what just happened with a guessed "gemini-3.1-flash") — a model-name mismatch
+        // shouldn't take partner reading's Q&A down entirely, even at the cost of the fuller
+        // model's better reasoning on that specific call until the name's fixed.
+        val primary = callGemini(apiKey, system, history, spokenText, PARTNER_JUDGMENT_SCHEMA, model = JUDGMENT_MODEL)
+        return (if (primary.isFailure) callGemini(apiKey, system, history, spokenText, PARTNER_JUDGMENT_SCHEMA, model = MODEL) else primary)
             .mapCatching { json ->
                 val obj = JSONObject(json)
                 val kindStr = obj.optString("kind", "READ_ATTEMPT")

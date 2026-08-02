@@ -712,12 +712,14 @@ class ReaderViewModel(
         if (bubble.partnerMode == mode) return
         geminiTts?.stop()
         partnerListenJob?.cancel()
-        // Resume one verse PAST whatever was last active, not on it again — e.g. switching modes
-        // after Bible Buddy read up through verse 13 should start the new mode at verse 14, not
-        // re-read/re-listen to 13. partnerVerseIndex already tracks "whichever verse is currently
-        // active" in every mode (including Solo Read's rough estimate), so +1 is the verse after
-        // whatever was last read.
-        val nextIdx = bubble.partnerVerseIndex + 1
+        // Resume AT the verse that was interrupted, not the one after it. partnerVerseIndex
+        // always points at whichever verse is currently assigned to the active turn — and
+        // completion (in every mode) advances it to the next verse as part of that same state
+        // update, so at any snapshot in time the tracked index is either genuinely mid-way
+        // through (AI_SPEAKING/LISTENING/AI_RESPONDING interrupted it) or freshly assigned and
+        // not yet attempted (AWAITING_USER) — never a verse that's already fully done. Adding +1
+        // here used to skip that not-yet-attempted verse entirely.
+        val resumeIdx = bubble.partnerVerseIndex
         _uiState.value = _uiState.value.copy(
             chatBubble = bubble.copy(
                 partnerMode = mode,
@@ -725,7 +727,7 @@ class ReaderViewModel(
                 partnerIncompleteRetryCount = 0,
             ),
         )
-        if (bubble.isPartnerMode) startPartnerModeAt(nextIdx)
+        if (bubble.isPartnerMode) startPartnerModeAt(resumeIdx)
     }
 
     private fun startPartnerModeAt(idx: Int) {
