@@ -54,6 +54,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.Image
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.BookmarkBorder
@@ -69,6 +71,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -250,37 +253,11 @@ fun ReaderScreen(
     // floats over the bottom of the screen regardless of where the verse lands, and the user
     // can still scroll manually (that background scrolling is untouched) if it ends up hidden.
 
-    // Continuous cross-chapter scroll (§ pagination): watched off the same listState the
-    // LazyColumn uses, so both loading-more-at-the-edge and the "which chapter is on screen
-    // right now" label below react to the same source of truth. Guarded internally by the
-    // ViewModel's isLoadingMore*/hasMore* flags, so firing on every scroll tick is harmless.
-    LaunchedEffect(listState) {
-        snapshotFlow {
-            listState.firstVisibleItemIndex to listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index
-        }.collect { (firstIndex, lastIndex) ->
-            if (firstIndex <= 3) viewModel.onNearTopOfList()
-            if (lastIndex != null && lastIndex >= uiState.verses.size - 4) viewModel.onNearBottomOfList()
-        }
-    }
-
-    // Prepending chapters above the current scroll position would otherwise yank the visible
-    // content downward (LazyColumn keeps the same *index* on screen, which now points at a
-    // different item) — compensate once, right after a prepend lands, by scrolling forward
-    // exactly as many items as were just added, keeping the same verse pinned in place.
-    LaunchedEffect(uiState.pendingTopPrependCount) {
-        val prependedCount = uiState.pendingTopPrependCount
-        if (prependedCount > 0) {
-            listState.scrollToItem(listState.firstVisibleItemIndex + prependedCount, listState.firstVisibleItemScrollOffset)
-            viewModel.clearPendingTopPrepend()
-        }
-    }
-
-    // The book/chapter button reflects whatever chapter is actually scrolled into view, not
-    // just wherever the reader was explicitly navigated to — necessary now that scrolling can
-    // carry the user across chapter (and book) boundaries without an explicit jump.
-    val topVisibleVerse by remember { derivedStateOf { uiState.verses.getOrNull(listState.firstVisibleItemIndex) } }
-    val displayedBookName = topVisibleVerse?.bookName ?: uiState.selectedBookName
-    val displayedChapter = topVisibleVerse?.chapter ?: uiState.selectedChapter
+    // Chapters are now deliberately separate — the reader only ever holds one chapter's worth of
+    // verses at a time (no more cross-chapter scroll-triggered prepend/append), so the on-screen
+    // book/chapter is always just whatever was explicitly navigated to.
+    val displayedBookName = uiState.selectedBookName
+    val displayedChapter = uiState.selectedChapter
 
     // NOTE: the navbar previously collapsed from an edge-to-edge rectangle into a floating
     // pill once scrolled (Insureit-style). Not needed for now — commented out rather than
@@ -431,6 +408,25 @@ fun ReaderScreen(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            // Explicit chapter navigation — the only way to move between chapters
+                            // now that scrolling stops dead at a chapter's own last/first verse
+                            // instead of silently pulling in the next/previous one. Compact
+                            // chevrons flanking the book/chapter pill read as a natural pair with
+                            // it, matching how page-turn controls sit next to a chapter selector
+                            // in most reading apps.
+                            IconButton(
+                                onClick = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.onPreviousChapter()
+                                },
+                                modifier = Modifier.size(28.dp),
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                                    contentDescription = "Previous chapter",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                             // Book/chapter: frosted-glass pill, no visible border — the iOS 27
                             // approach where controls look pressed into the glass surface rather
                             // than layered on top of it. Box+clickable instead of TextButton
@@ -455,6 +451,19 @@ fun ReaderScreen(
                                     style = MaterialTheme.typography.titleSmall,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.onNextChapter()
+                                },
+                                modifier = Modifier.size(28.dp),
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    contentDescription = "Next chapter",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                             // Language picker: same liquid-glass treatment but tinted sky-blue.

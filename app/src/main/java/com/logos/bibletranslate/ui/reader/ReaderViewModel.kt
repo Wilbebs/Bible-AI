@@ -712,7 +712,12 @@ class ReaderViewModel(
         if (bubble.partnerMode == mode) return
         geminiTts?.stop()
         partnerListenJob?.cancel()
-        val currentIdx = bubble.partnerVerseIndex
+        // Resume one verse PAST whatever was last active, not on it again — e.g. switching modes
+        // after Bible Buddy read up through verse 13 should start the new mode at verse 14, not
+        // re-read/re-listen to 13. partnerVerseIndex already tracks "whichever verse is currently
+        // active" in every mode (including Solo Read's rough estimate), so +1 is the verse after
+        // whatever was last read.
+        val nextIdx = bubble.partnerVerseIndex + 1
         _uiState.value = _uiState.value.copy(
             chatBubble = bubble.copy(
                 partnerMode = mode,
@@ -720,7 +725,7 @@ class ReaderViewModel(
                 partnerIncompleteRetryCount = 0,
             ),
         )
-        if (bubble.isPartnerMode) startPartnerModeAt(currentIdx)
+        if (bubble.isPartnerMode) startPartnerModeAt(nextIdx)
     }
 
     private fun startPartnerModeAt(idx: Int) {
@@ -1908,64 +1913,47 @@ class ReaderViewModel(
     }
 
     /**
-     * Called by the UI once the scroll position nears the bottom of what's loaded — appends the
-     * next chapter (crossing into the next book at a book's end) so scrolling reads as one
-     * continuous stream instead of stopping dead at a chapter boundary.
+     * Chapters are deliberately kept separate — scrolling past a chapter's last verse no longer
+     * silently pulls in the next one. Continuous cross-chapter scroll made every chapter boundary
+     * invisible, which worked against the AI window's per-chapter prefetching (partner mode's
+     * "load this chapter" cost decisions assumed a chapter was a bounded, intentional unit) and
+     * meant a chapter change could happen with no clear moment the user actually chose it. See
+     * [onNextChapter]/[onPreviousChapter] for the explicit navigation that replaces this.
      */
-    fun onNearBottomOfList() {
-        val state = _uiState.value
-        if (state.isLoadingMoreBottom || !state.hasMoreBottom) return
-        val last = state.verses.lastOrNull() ?: return
-        _uiState.value = state.copy(isLoadingMoreBottom = true)
-        viewModelScope.launch {
-            val next = nextChapterRef(state.language, last.bookId, last.chapter, state.books)
-            if (next == null) {
-                _uiState.value = _uiState.value.copy(isLoadingMoreBottom = false, hasMoreBottom = false)
-                return@launch
-            }
-            val (bookId, chapter) = next
-            val newVerses = repository.getChapter(state.language, bookId, chapter)
-            val newWordTranslations = wordTranslationRepository.getChapterWordTranslations(state.language, state.targetLanguage, bookId, chapter)
-            val current = _uiState.value
-            _uiState.value = current.copy(
-                verses = current.verses + newVerses,
-                wordTranslations = current.wordTranslations + newWordTranslations,
-                isLoadingMoreBottom = false,
-            )
-        }
-    }
+    fun onNearBottomOfList() {}
 
-    /** Same idea as [onNearBottomOfList], but prepending the previous chapter as the user scrolls up. */
-    fun onNearTopOfList() {
-        val state = _uiState.value
-        if (state.isLoadingMoreTop || !state.hasMoreTop) return
-        val first = state.verses.firstOrNull() ?: return
-        _uiState.value = state.copy(isLoadingMoreTop = true)
-        viewModelScope.launch {
-            val prev = prevChapterRef(state.language, first.bookId, first.chapter, state.books)
-            if (prev == null) {
-                _uiState.value = _uiState.value.copy(isLoadingMoreTop = false, hasMoreTop = false)
-                return@launch
-            }
-            val (bookId, chapter) = prev
-            val newVerses = repository.getChapter(state.language, bookId, chapter)
-            val newWordTranslations = wordTranslationRepository.getChapterWordTranslations(state.language, state.targetLanguage, bookId, chapter)
-            val current = _uiState.value
-            _uiState.value = current.copy(
-                verses = newVerses + current.verses,
-                wordTranslations = current.wordTranslations + newWordTranslations,
-                isLoadingMoreTop = false,
-                // Tells the UI exactly how many items just landed above the viewport, so it can
-                // compensate the scroll offset by that many items and avoid a visible jump.
-                pendingTopPrependCount = newVerses.size,
-            )
-        }
-    }
+    /** See [onNearBottomOfList] — no-op, chapters no longer auto-load into each other. */
+    fun onNearTopOfList() {}
 
     /** Called by the UI right after it has compensated the scroll offset for a top-prepend. */
     fun clearPendingTopPrepend() {
         if (_uiState.value.pendingTopPrependCount == 0) return
         _uiState.value = _uiState.value.copy(pendingTopPrependCount = 0)
+    }
+
+    /** Explicit chapter navigation — the only way to move between chapters now that scrolling
+     *  doesn't cross chapter boundaries on its own. Crosses into the next book at a book's last
+     *  chapter; no-ops past Revelation's last chapter. */
+    fun onNextChapter() {
+        val state = _uiState.value
+        val last = state.verses.lastOrNull() ?: return
+        viewModelScope.launch {
+            val next = nextChapterRef(state.language, last.bookId, last.chapter, state.books) ?: return@launch
+            val (bookId, chapter) = next
+            onBookAndChapterSelected(bookId, chapter)
+        }
+    }
+
+    /** See [onNextChapter] — crosses into the previous book's last chapter at a book's chapter 1;
+     *  no-ops before Genesis 1. */
+    fun onPreviousChapter() {
+        val state = _uiState.value
+        val first = state.verses.firstOrNull() ?: return
+        viewModelScope.launch {
+            val prev = prevChapterRef(state.language, first.bookId, first.chapter, state.books) ?: return@launch
+            val (bookId, chapter) = prev
+            onBookAndChapterSelected(bookId, chapter)
+        }
     }
 
     private suspend fun reloadWordTranslations() {

@@ -1185,8 +1185,9 @@ private fun PartnerReadingBody(
  *
  * Idle footprint is ~1.5× [PartnerModeSwitch]'s 40dp width (icon-only, no room for three text
  * labels at once) so the two toggles read as a matched pair. Tapping a segment switches modes and
- * briefly expands the pill so the just-picked mode's label is actually readable, then collapses
- * back to the compact icon row a couple seconds later.
+ * briefly widens JUST that one segment enough to show its short label ("Buddy" / "Aloud" /
+ * "Solo") — the other two segments stay fixed-width icons throughout, never expanding — then it
+ * collapses back to icon-only a couple seconds later.
  */
 @Composable
 private fun PartnerModePillSelector(
@@ -1195,24 +1196,22 @@ private fun PartnerModePillSelector(
     modifier: Modifier = Modifier,
 ) {
     val options = listOf(
-        Triple(PartnerReadingMode.PARTNER_READ, "Partner Read", Icons.Filled.SwapHoriz),
-        Triple(PartnerReadingMode.READ_ALOUD, "Read Aloud", Icons.Filled.VolumeUp),
-        Triple(PartnerReadingMode.SOLO_READ, "Solo Read", Icons.Filled.Person),
+        Triple(PartnerReadingMode.PARTNER_READ, "Buddy", Icons.Filled.SwapHoriz),
+        Triple(PartnerReadingMode.READ_ALOUD, "Aloud", Icons.Filled.VolumeUp),
+        Triple(PartnerReadingMode.SOLO_READ, "Solo", Icons.Filled.Person),
     )
     var expanded by remember { mutableStateOf(false) }
     var expandTrigger by remember { mutableStateOf(0) }
     LaunchedEffect(expandTrigger) {
         if (expandTrigger > 0) {
             expanded = true
-            delay(1800)
+            delay(1600)
             expanded = false
         }
     }
-    val width by animateDpAsState(targetValue = if (expanded) 150.dp else 60.dp, label = "partnerPillWidth")
 
     Row(
         modifier = modifier
-            .width(width)
             .height(22.dp)
             .clip(RoundedCornerShape(11.dp))
             .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.09f))
@@ -1222,9 +1221,15 @@ private fun PartnerModePillSelector(
     ) {
         options.forEach { (optionMode, label, icon) ->
             val selected = optionMode == mode
+            // Only the selected segment's own width ever animates — the other two always stay at
+            // the compact icon-only width, regardless of what's expanded.
+            val segmentWidth by animateDpAsState(
+                targetValue = if (selected && expanded) 46.dp else 18.dp,
+                label = "partnerPillSegmentWidth",
+            )
             Box(
                 modifier = Modifier
-                    .weight(1f)
+                    .width(segmentWidth)
                     .clip(RoundedCornerShape(9.dp))
                     .background(if (selected) Glass.skyBlue.copy(alpha = 0.25f) else Color.Transparent)
                     .clickable(
@@ -1245,7 +1250,6 @@ private fun PartnerModePillSelector(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 2.dp),
                     )
                 } else {
                     Icon(

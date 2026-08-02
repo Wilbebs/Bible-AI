@@ -11,6 +11,12 @@ import java.net.URL
 
 private const val MODEL = "gemini-3.1-flash-lite"
 
+/** judgePartnerReading specifically uses the fuller model, not flash-lite — distinguishing "is
+ *  this a read attempt or a question" turned out to need real reasoning on short, noisy
+ *  transcripts that flash-lite kept getting wrong (swallowing genuine questions, especially
+ *  short follow-ups, as reading attempts). Worth the extra latency/cost per explicit direction. */
+private const val JUDGMENT_MODEL = "gemini-3.1-flash"
+
 private val DETECTION_RESPONSE_SCHEMA = JSONObject()
     .put("type", "OBJECT")
     .put(
@@ -216,7 +222,16 @@ class VerseChatClient {
               same conversation, not a garbled reading attempt. People essentially never resume
               reading with a one- or two-word reply to their own question's answer.
 
-            When torn between the two, ask: does this transcript share real content with the
+            Strong signal, independent of content overlap: if the transcript contains an
+            interrogative or directive word or phrase — in ANY language, not just $sourceLangName
+            — treat it as QUESTION_OR_STATEMENT even if some words happen to also appear in the
+            verse. Examples across common languages: English "what/why/how/who/when/where/can
+            you/explain/tell me/what does ... mean"; Spanish "qué/por qué/cómo/quién/cuándo/dónde/
+            puedes/explica/qué significa"; Portuguese "o que/por que/como/quem/quando/onde/pode/
+            explique/o que significa". This check comes first — content overlap with the verse is
+            what decides READ_ATTEMPT only once you've confirmed no such marker is present.
+
+            Otherwise, when still torn, ask: does this transcript share real content with the
             verse text, or does it read as directed at you as a conversational partner (including
             continuing something from the history above)? Favor READ_ATTEMPT only when there's
             actual overlap with the verse itself; favor QUESTION_OR_STATEMENT whenever the
@@ -241,7 +256,7 @@ class VerseChatClient {
               just ends, as if the recognizer cut them off mid-sentence. When genuinely unsure,
               prefer true — this must not become a new way to nitpick the read.
         """.trimIndent()
-        return callGemini(apiKey, system, history, spokenText, PARTNER_JUDGMENT_SCHEMA)
+        return callGemini(apiKey, system, history, spokenText, PARTNER_JUDGMENT_SCHEMA, model = JUDGMENT_MODEL)
             .mapCatching { json ->
                 val obj = JSONObject(json)
                 val kindStr = obj.optString("kind", "READ_ATTEMPT")
@@ -276,10 +291,11 @@ class VerseChatClient {
         history: List<ChatMessage>,
         userMessage: String,
         responseSchema: JSONObject?,
+        model: String = MODEL,
     ): Result<String> {
         for (attempt in 0..2) {
             if (attempt > 0) delay(400L * attempt)
-            val result = callGeminiOnce(apiKey, systemInstruction, history, userMessage, responseSchema)
+            val result = callGeminiOnce(apiKey, systemInstruction, history, userMessage, responseSchema, model)
             if (result.isSuccess) return result
             val transient = result.exceptionOrNull() is TransientHttpException ||
                 result.exceptionOrNull() is java.net.SocketTimeoutException
@@ -295,6 +311,7 @@ class VerseChatClient {
         history: List<ChatMessage>,
         userMessage: String,
         responseSchema: JSONObject?,
+        model: String,
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             val contents = JSONArray()
@@ -311,7 +328,7 @@ class VerseChatClient {
                     .put("parts", JSONArray().put(JSONObject().put("text", userMessage))),
             )
 
-            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$MODEL:generateContent?key=$apiKey")
+            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey")
             val connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "POST"
             connection.setRequestProperty("Content-Type", "application/json")
