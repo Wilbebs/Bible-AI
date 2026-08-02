@@ -1,6 +1,7 @@
 package com.logos.bibletranslate
 
 import android.app.Application
+import com.logos.bibletranslate.data.AuthRepository
 import com.logos.bibletranslate.data.BibleRepository
 import com.logos.bibletranslate.data.GeminiLiveTranslateClient
 import com.logos.bibletranslate.data.GoogleTranslateLiveClient
@@ -17,4 +18,5 @@ class BibleApplication : Application() {
     val liveTranslationCache: LiveTranslationCache by lazy { LiveTranslationCache(this) }
     val verseChatClient: VerseChatClient by lazy { VerseChatClient() }
     val verseChatCache: VerseChatCache by lazy { VerseChatCache(this) }
+    val authRepository: AuthRepository by lazy { AuthRepository(this) }
 }

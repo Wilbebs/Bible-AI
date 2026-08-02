@@ -269,6 +269,36 @@ Greek/Aramaic OT to bundle).
 
 ---
 
+## 6a. Firebase setup required before login actually works
+
+Login (Google Sign-In + email/password), and everything planned on top of it (profile,
+bookmarks/highlights sync, theme preference), needs a one-time manual setup in the Firebase
+console before it does anything. **Until this is done, the app skips the login screen entirely
+and behaves exactly as it did before this feature existed** — `AuthRepository.isConfigured`
+checks whether `google-services.json` was present at build time and the login gate no-ops if
+not, so this isn't a hard blocker for anyone working on unrelated parts of the app.
+
+Steps (do these once):
+
+1. Go to the [Firebase console](https://console.firebase.google.com), **Add project**, and
+   choose **"bible-translate-502001"** — the same GCP project already used for Gemini/Translate/
+   Cloud TTS — rather than creating a new one, so everything stays under one project/billing.
+2. Add an Android app to that Firebase project:
+   - Package name: `com.logos.bibletranslate`
+   - Debug SHA-1: `A0:93:53:E0:BE:F5:09:AB:81:38:D0:E5:E0:5C:04:BA:AB:DE:4C:B5`
+   - Debug SHA-256: `4E:32:B2:46:AD:C1:54:B6:41:61:F9:46:8C:89:EE:94:E4:25:D2:D4:E2:A7:1C:62:68:39:76:3A:46:40:35:49`
+   - (These are from the shared debug keystore — fine for development; a release build will need
+     its own release-keystore fingerprints added the same way before shipping.)
+3. Download the generated **`google-services.json`** and place it at `app/google-services.json`
+   (same folder as `app/build.gradle.kts`). It's safe to commit — it contains only public
+   client identifiers, the same ones that end up inside the compiled APK either way.
+4. In the Firebase console, **Authentication → Sign-in method**, enable **Google** and
+   **Email/Password**.
+5. Rebuild. The `com.google.gms.google-services` Gradle plugin only applies once it detects the
+   file (see `app/build.gradle.kts`), so nothing else needs to change.
+
+---
+
 ## 7. Suggested next steps
 
 1. Frontend/visual redesign in Replit (the actual point of this handoff).
